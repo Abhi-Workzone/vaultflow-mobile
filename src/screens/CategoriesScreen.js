@@ -1,199 +1,420 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  Modal,
+  TextInput,
+  Alert,
+  Dimensions,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { categoryApi, dashboardApi } from '../api';
+import { categoryApi } from '../api';
+import Header from '../components/Header';
+import { showToast } from '../utils/toast';
+
+const { width } = Dimensions.get('window');
 
 const CategoriesScreen = () => {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [categories, setCategories] = useState([]);
-  const [dashboardCards, setDashboardCards] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newCategory, setNewCategory] = useState({
-    name: '',
-    budget: 0,
-    icon: 'grid'
-  });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(10);
+  const [totalCategories, setTotalCategories] = useState(0);
+  
+  // Modal states
+  const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [categoryName, setCategoryName] = useState('');
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showLimitDropdown, setShowLimitDropdown] = useState(false);
 
-  useEffect(() => {
-    fetchCategories();
-    fetchDashboardCards();
-  }, []);
-
-  useEffect(() => {
-    fetchCategories();
-  }, [searchQuery]);
-
-  const fetchCategories = async () => {
+  const fetchCategories = useCallback(async (currentPage = page, currentLimit = limit, query = searchQuery) => {
     try {
-      setLoading(true);
-      const params = { limit: 100 };
-      console.log('📞 Fetching Categories with params:', params);
+      if (!refreshing) setLoading(true);
+      const params = {
+        page: currentPage,
+        limit: currentLimit,
+        searchTerm: query,
+      };
+      
       const response = await categoryApi.getCategories(params);
-      console.log('📊 Categories Count:', response?.data?.categories?.length);
       
-      const categoriesArray = response?.data?.categories || [];
-      setCategories(categoriesArray);
-      
-      if (categoriesArray.length === 0) {
-        console.log('⚠️ No categories found');
+      if (response && response.data) {
+        setCategories(response.data.categories || []);
+        setTotalCategories(response.data.total || response.data.categories?.length || 0);
       }
     } catch (error) {
       console.error('Error fetching categories:', error);
+      showToast.error('Error', 'Failed to fetch categories');
     } finally {
       setLoading(false);
+      setRefreshing(false);
+    }
+  }, [page, limit, searchQuery, refreshing]);
+
+  useEffect(() => {
+    fetchCategories();
+  }, [page, limit]);
+
+  // Debounced search effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        fetchCategories(1, limit, searchQuery);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    if (page === 1) {
+      fetchCategories(1, limit, searchQuery);
+    } else {
+      setPage(1);
     }
   };
 
-  const fetchDashboardCards = async () => {
+  const handleAddCategory = async () => {
+    if (!categoryName.trim()) {
+      showToast.error('Validation', 'Please enter a category name');
+      return;
+    }
+
     try {
-      const response = await dashboardApi.getDashboardCards();
-      setDashboardCards(response);
+      setIsSubmitting(true);
+      const response = await categoryApi.createCategory({ name: categoryName.trim() });
+      if (response) {
+        showToast.success('Success', 'Category created successfully');
+        setIsAddModalVisible(false);
+        setCategoryName('');
+        // Always reset to page 1 to see the newest category
+        setSearchQuery('');
+        if (page === 1) {
+          fetchCategories(1, limit, '');
+        } else {
+          setPage(1);
+        }
+      }
     } catch (error) {
-      console.error('Error fetching dashboard cards:', error);
+      showToast.error('Error', error.response?.data?.message || 'Failed to create category');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const totalBudget = (categories || []).reduce((sum, cat) => sum + (cat.budget || 0), 0);
-  const totalSpent = (categories || []).reduce((sum, cat) => sum + (cat.spent || cat.amount || 0), 0);
+  const handleUpdateCategory = async () => {
+    if (!categoryName.trim()) {
+      showToast.error('Validation', 'Please enter a category name');
+      return;
+    }
 
-  const handleAddCategory = () => {
-    setShowAddModal(true);
+    try {
+      setIsSubmitting(true);
+      const response = await categoryApi.updateCategory({
+        id: editingCategory._id,
+        name: categoryName.trim(),
+      });
+      if (response) {
+        showToast.success('Success', 'Category updated successfully');
+        setIsEditModalVisible(false);
+        setEditingCategory(null);
+        setCategoryName('');
+        fetchCategories();
+      }
+    } catch (error) {
+      showToast.error('Error', error.response?.data?.message || 'Failed to update category');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleCloseModal = () => {
-    setShowAddModal(false);
-    setNewCategory({
-      name: '',
-      budget: 0,
-      icon: 'grid'
+  const handleDeleteCategory = (category) => {
+    Alert.alert(
+      'Delete Category',
+      `Are you sure you want to delete "${category.name}"? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await categoryApi.deleteCategory({ id: category._id });
+              showToast.success('Deleted', 'Category removed successfully');
+              fetchCategories();
+            } catch (error) {
+              showToast.error('Error', 'Failed to delete category');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const openEditModal = (category) => {
+    setEditingCategory(category);
+    setCategoryName(category.name);
+    setIsEditModalVisible(true);
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
     });
   };
 
-  const handleSaveCategory = async () => {
-    if (!newCategory.name.trim()) {
-      return;
-    }
-    
-    try {
-      const response = await categoryApi.createCategory(newCategory);
-      console.log('✅ Category Created:', response);
-      
-      setShowAddModal(false);
-      setNewCategory({
-        name: '',
-        budget: 0,
-        icon: 'grid'
-      });
-      fetchCategories();
-    } catch (error) {
-      console.error('Error creating category:', error);
-    }
-  };
+  const totalPages = Math.ceil(totalCategories / limit) || 1;
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3B82F6" />
-          <Text style={styles.loadingText}>Loading categories...</Text>
+  const renderCategoryItem = ({ item: category }) => (
+    <View style={styles.categoryCard}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardIconContainer}>
+          <Ionicons name="folder-outline" size={22} color="#3B82F6" />
         </View>
-      </SafeAreaView>
-    );
-  }
-
-  console.log('📱 Rendering CategoriesScreen:', {
-    categoriesCount: categories?.length,
-    loading
-  });
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.searchContainer}>
-          <View style={styles.searchBox}>
-            <Ionicons name="search" size={20} color="#6B7280" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search categories..."
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
+        <View style={styles.cardTitleSection}>
+          <Text style={styles.categoryTitle}>{category.name}</Text>
+          <View style={styles.dateRow}>
+            <Ionicons name="calendar-outline" size={12} color="#9CA3AF" style={{ marginRight: 4 }} />
+            <Text style={styles.dateText}>Created: {formatDate(category.createdAt)}</Text>
+          </View>
+          <View style={styles.dateRow}>
+            <Ionicons name="time-outline" size={12} color="#9CA3AF" style={{ marginRight: 4 }} />
+            <Text style={styles.dateText}>Updated: {formatDate(category.updatedAt)}</Text>
           </View>
         </View>
-        <Text style={styles.title}>Categories</Text>
+        <View style={styles.actionButtons}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => openEditModal(category)}
+          >
+            <Ionicons name="create-outline" size={20} color="#3B82F6" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleDeleteCategory(category)}
+          >
+            <Ionicons name="trash-outline" size={20} color="#EF4444" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderHeader = () => (
+    <View>
+      <Header title="Categories" />
+      
+      {/* Search and Limit Section */}
+      <View style={styles.searchSection}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search-outline" size={20} color="#6B7280" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search categories..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+            </TouchableOpacity>
+          )}
+        </View>
+        
+        <TouchableOpacity 
+          style={styles.limitSelector}
+          onPress={() => setShowLimitDropdown(!showLimitDropdown)}
+        >
+          <Text style={styles.limitText}>{limit} per page</Text>
+          <Ionicons name={showLimitDropdown ? "chevron-up" : "chevron-down"} size={16} color="#64748B" />
+        </TouchableOpacity>
       </View>
 
-     
+      {showLimitDropdown && (
+        <View style={styles.limitDropdown}>
+          {[10, 20, 50].map((val) => (
+            <TouchableOpacity 
+              key={val} 
+              style={[styles.limitOption, limit === val && styles.limitOptionActive]}
+              onPress={() => {
+                setLimit(val);
+                setPage(1);
+                setShowLimitDropdown(false);
+              }}
+            >
+              <Text style={[styles.limitOptionText, limit === val && styles.limitOptionTextActive]}>
+                {val} items
+              </Text>
+              {limit === val && <Ionicons name="checkmark" size={16} color="#3B82F6" />}
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
 
-      {/* Categories List */}
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {categories.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Ionicons name="grid-outline" size={48} color="#9CA3AF" />
-            <Text style={styles.emptyStateTitle}>No Categories Found</Text>
-            <Text style={styles.emptyStateDescription}>
-              You haven't created any categories yet. Start by adding your first budget category!
-            </Text>
-          </View>
-        ) : (
-          categories.map((category, index) => {
-            const spent = category.spent || category.amount || 0;
-            const budget = category.budget || 0;
-            const spentPercentage = budget > 0 ? Math.round((spent / budget) * 100) : 0;
-            const remaining = budget - spent;
+  const renderFooter = () => {
+    if (totalPages <= 1 && categories.length === 0) return null;
+
+    return (
+      <View style={styles.footerContainer}>
+        {totalPages > 1 && (
+          <View style={styles.paginationContainer}>
+            <TouchableOpacity
+              style={[styles.paginationButton, page === 1 && styles.paginationButtonDisabled]}
+              onPress={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              <Ionicons name="chevron-back" size={20} color={page === 1 ? '#9CA3AF' : '#3B82F6'} />
+            </TouchableOpacity>
             
-            return (
-              <TouchableOpacity key={category._id || index} style={styles.categoryItem}>
-                <View style={styles.categoryHeader}>
-                  <View style={[styles.categoryIcon, { backgroundColor: category.color || '#3B82F6' }]}>
-                    <Ionicons name={category.icon || 'grid'} size={20} color="#FFFFFF" />
-                  </View>
-                  <View style={styles.categoryInfo}>
-                    <Text style={styles.categoryName}>{category.name || 'Category'}</Text>
-                    <Text style={styles.categoryBudget}>Budget: ${budget}</Text>
-                  </View>
-                  <TouchableOpacity style={styles.moreButton}>
-                    <Ionicons name="ellipsis-vertical" size={20} color="#6B7280" />
-                  </TouchableOpacity>
-                </View>
-                
-                <View style={styles.progressContainer}>
-                  <View style={styles.progressBar}>
-                    <View 
-                      style={[
-                        styles.progressFill,
-                        { 
-                          width: `${spentPercentage}%`,
-                          backgroundColor: spentPercentage >= 100 ? '#EF4444' : (category.color || '#3B82F6')
-                        }
-                      ]} 
-                    />
-                  </View>
-                  <Text style={styles.progressText}>
-                    ${spent} / ${budget} ({spentPercentage}%)
-                  </Text>
-                </View>
-                
-                <View style={styles.categoryStats}>
-                  <Text style={[styles.categorySpent, { color: category.color || '#3B82F6' }]}>
-                    ${spent}
-                  </Text>
-                  <Text style={styles.categoryRemaining}>
-                    ${remaining} left
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            );
-          })
-        )}
-      </ScrollView>
+            <View style={styles.pageIndicator}>
+              <Text style={styles.pageText}>Page {page} of {totalPages}</Text>
+            </View>
 
-      {/* Floating Add Button */}
-      <TouchableOpacity style={styles.addButton} onPress={handleAddCategory}>
-        <Ionicons name="add" size={24} color="#FFFFFF" />
+            <TouchableOpacity
+              style={[styles.paginationButton, page === totalPages && styles.paginationButtonDisabled]}
+              onPress={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+            >
+              <Ionicons name="chevron-forward" size={20} color={page === totalPages ? '#9CA3AF' : '#3B82F6'} />
+            </TouchableOpacity>
+          </View>
+        )}
+        <View style={{ height: 80 }} />
+      </View>
+    );
+  };
+
+  const renderEmpty = () => {
+    if (loading) return null;
+    return (
+      <View style={styles.emptyState}>
+        <View style={styles.emptyIconContainer}>
+          <Ionicons name="grid-outline" size={60} color="#DBEAFE" />
+        </View>
+        <Text style={styles.emptyTitle}>No Categories</Text>
+        <Text style={styles.emptySubtitle}>
+          {searchQuery ? "No categories match your search." : "You haven't added any categories yet."}
+        </Text>
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      {renderHeader()}
+
+      {loading && !refreshing && categories.length === 0 ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#3B82F6" />
+        </View>
+      ) : (
+        <FlatList
+          data={categories}
+          renderItem={renderCategoryItem}
+          keyExtractor={(item) => item._id}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={renderEmpty}
+          ListFooterComponent={renderFooter}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3B82F6']} />
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      )}
+
+      {/* Floating Action Button */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => {
+          setCategoryName('');
+          setIsAddModalVisible(true);
+        }}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="add" size={30} color="#FFFFFF" />
       </TouchableOpacity>
+
+      {/* Add/Edit Modal */}
+      <Modal
+        visible={isAddModalVisible || isEditModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setIsAddModalVisible(false);
+          setIsEditModalVisible(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {isAddModalVisible ? 'Add Category' : 'Edit Category'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setIsAddModalVisible(false);
+                  setIsEditModalVisible(false);
+                }}
+              >
+                <Ionicons name="close" size={24} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalBody}>
+              <Text style={styles.inputLabel}>Category Name</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Enter name (e.g. Shopping)"
+                value={categoryName}
+                onChangeText={setCategoryName}
+                autoFocus
+              />
+            </View>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setIsAddModalVisible(false);
+                  setIsEditModalVisible(false);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={isAddModalVisible ? handleAddCategory : handleUpdateCategory}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -201,258 +422,295 @@ const CategoriesScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F8FAFC',
   },
-  loadingContainer: {
+  centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F9FAFB',
   },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  header: {
+  searchSection: {
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    gap: 10,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1F2937',
-  },
-  addButton: {
-    width: 40,
-    height: 40,
-    backgroundColor: '#3B82F6',
-    borderRadius: 20,
-    justifyContent: 'center',
+  searchBar: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 48,
   },
-  overviewCard: {
-    backgroundColor: '#3B82F6',
-    margin: 16,
-    borderRadius: 16,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  overviewTitle: {
+  searchInput: {
+    flex: 1,
+    marginLeft: 10,
     fontSize: 16,
-    color: '#FFFFFF',
+    color: '#1E293B',
+  },
+  limitSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 12,
+    height: 48,
+    borderRadius: 12,
+    gap: 6,
+  },
+  limitText: {
+    fontSize: 14,
     fontWeight: '600',
-    marginBottom: 16,
-    textAlign: 'center',
+    color: '#64748B',
   },
-  overviewStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#93C5FD',
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  scrollView: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  categoryItem: {
+  limitDropdown: {
+    position: 'absolute',
+    top: 130,
+    right: 20,
+    width: 140,
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    padding: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    elevation: 10,
+    zIndex: 1000,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
   },
-  categoryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  categoryIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  categoryInfo: {
-    flex: 1,
-  },
-  categoryName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 2,
-  },
-  categoryBudget: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  moreButton: {
-    padding: 4,
-  },
-  progressContainer: {
-    marginBottom: 12,
-  },
-  progressBar: {
-    height: 8,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 4,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  progressText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  categoryStats: {
+  limitOption: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
   },
-  categorySpent: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 2,
+  limitOptionActive: {
+    backgroundColor: '#EFF6FF',
   },
-  categoryRemaining: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
+  limitOptionText: {
+    fontSize: 14,
+    color: '#64748B',
   },
-  modalContainer: {
+  limitOptionTextActive: {
+    color: '#3B82F6',
+    fontWeight: '600',
+  },
+  listContent: {
+    padding: 20,
+    paddingTop: 10,
+  },
+  categoryCard: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 20,
-    paddingHorizontal: 16,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  cardTitleSection: {
+    flex: 1,
+  },
+  categoryTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  dateText: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 30,
+    right: 25,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#3B82F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  footerContainer: {
+    marginTop: 10,
+  },
+  paginationContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  paginationButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 15,
+  },
+  paginationButtonDisabled: {
+    backgroundColor: '#F1F5F9',
+  },
+  pageIndicator: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  pageText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+  },
+  emptyIconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 16,
+    color: '#64748B',
+    textAlign: 'center',
+    paddingHorizontal: 40,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    width: '100%',
+    maxWidth: 400,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.25,
+    shadowRadius: 30,
+    elevation: 10,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1F2937',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1E293B',
   },
-  modalContent: {
-    gap: 16,
-  },
-  inputGroup: {
-    gap: 12,
+  modalBody: {
+    marginBottom: 24,
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#1F2937',
+    color: '#64748B',
     marginBottom: 8,
+    marginLeft: 4,
   },
-  textInput: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  modalInput: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    height: 54,
+    fontSize: 16,
+    color: '#1E293B',
     borderWidth: 1,
-    borderColor: '#D1D5DB',
-    fontSize: 14,
+    borderColor: '#E2E8F0',
   },
-  iconSelect: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-  },
-  selectText: {
-    fontSize: 14,
-    color: '#1F2937',
-  },
-  modalActions: {
+  modalFooter: {
     flexDirection: 'row',
     gap: 12,
-    marginTop: 20,
   },
-  clearButton: {
+  modalButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-  },
-  clearButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6B7280',
-  },
-  applyButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#3B82F6',
-    alignItems: 'center',
-  },
-  applyButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  emptyState: {
-    flex: 1,
+    height: 50,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 20,
   },
-  emptyStateTitle: {
-    fontSize: 18,
+  cancelButton: {
+    backgroundColor: '#F1F5F9',
+  },
+  saveButton: {
+    backgroundColor: '#3B82F6',
+  },
+  cancelButtonText: {
+    fontSize: 16,
     fontWeight: '600',
-    color: '#1F2937',
-    marginTop: 16,
-    marginBottom: 8,
-    textAlign: 'center',
+    color: '#64748B',
   },
-  emptyStateDescription: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 20,
+  saveButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });
 

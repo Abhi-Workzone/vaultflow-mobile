@@ -1,14 +1,13 @@
-# Daily Planner Mobile App
+# Vault Flow Mobile App
 
-A React Native mobile application built with Expo that provides daily planning, task management, and analytics features.
+A React Native mobile application built with Expo that provides financial tracking, budget management, and analytics features.
 
 ## Features
 
-- **Plan Screen**: Create daily plans with routines and tasks
-- **Today Screen**: Track execution of daily plans with status updates
-- **Todo Screen**: Manage task backlog with flexible and time-bound tasks
-- **Routine Screen**: Create and manage weekly routines
-- **Analytics Screen**: View performance insights and execution history
+- **Dashboard Screen**: Financial overview with stats, charts, and recent transactions
+- **Transactions Screen**: Track and manage all financial transactions
+- **Categories Screen**: Create and manage budget categories
+- **Profile Screen**: User account management and settings
 
 ## Tech Stack
 

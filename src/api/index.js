@@ -38,7 +38,8 @@ api.interceptors.request.use(async (config) => {
     url: config.url,
     baseURL: config.baseURL,
     hasToken: !!token,
-    headers: config.headers
+    headers: config.headers,
+    body: config.data || null,
   });
   
   if (token) {
@@ -196,14 +197,14 @@ export const categoryApi = {
   getCategories: (requestJson = {}) => api.post('/v1/public/category/getAll', requestJson),
   createCategory: (requestJson = {}) => api.post('/v1/public/category/create', requestJson),
   updateCategory: (requestJson = {}) => api.post('/v1/public/category/update', requestJson),
-  deleteCategory: (requestJson = {}) => api.post('/v1/public/category/delete', { data: requestJson }),
+  deleteCategory: (requestJson = {}) => api.post('/v1/public/category/delete', requestJson),
 };
 
 export const transactionApi = {
   getTransactions: (requestJson = {}) => api.post('/v1/public/transaction/getAll', requestJson),
   createTransaction: (requestJson = {}) => api.post('/v1/public/transaction/create', requestJson),
   updateTransaction: (requestJson = {}) => api.post('/v1/public/transaction/update', requestJson),
-  deleteTransaction: (requestJson = {}) => api.post('/v1/public/transaction/delete', { data: requestJson }),
+  deleteTransaction: (requestJson = {}) => api.post('/v1/public/transaction/delete', requestJson),
   getTransactionById: (requestJson = {}) => api.post('/v1/public/transaction/getById', requestJson),
 };
 
