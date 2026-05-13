@@ -604,15 +604,27 @@ const TransactionsScreen = () => {
                   </View>
 
                   {showDatePicker && (
-                    <DateTimePicker
-                      value={form.date}
-                      mode="date"
-                      display="default"
-                      onChange={(event, selectedDate) => {
-                        setShowDatePicker(Platform.OS === 'ios');
-                        if (selectedDate) setForm({ ...form, date: selectedDate });
-                      }}
-                    />
+                    <Modal transparent animationType="fade">
+                      <TouchableOpacity 
+                        style={styles.datePickerOverlay} 
+                        activeOpacity={1} 
+                        onPress={() => setShowDatePicker(false)}
+                      >
+                        <View style={styles.datePickerContainer}>
+                          <DateTimePicker
+                            value={form.date}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+                            onChange={(event, date) => {
+                              if (date) {
+                                setShowDatePicker(false);
+                                setForm({ ...form, date });
+                              }
+                            }}
+                          />
+                        </View>
+                      </TouchableOpacity>
+                    </Modal>
                   )}
 
                   <Text style={styles.label}>Tags</Text>
@@ -774,27 +786,51 @@ const TransactionsScreen = () => {
                 </View>
 
                 {showFilterStartDatePicker && (
-                  <DateTimePicker
-                    value={filters.startDate || new Date()}
-                    mode="date"
-                    display="default"
-                    onChange={(event, date) => {
-                      setShowFilterStartDatePicker(Platform.OS === 'ios');
-                      if (date) setFilters({ ...filters, startDate: date });
-                    }}
-                  />
+                  <Modal transparent animationType="fade">
+                    <TouchableOpacity 
+                      style={styles.datePickerOverlay} 
+                      activeOpacity={1} 
+                      onPress={() => setShowFilterStartDatePicker(false)}
+                    >
+                      <View style={styles.datePickerContainer}>
+                        <DateTimePicker
+                          value={filters.startDate || new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+                          onChange={(event, date) => {
+                            if (date) {
+                              setShowFilterStartDatePicker(false);
+                              setFilters({ ...filters, startDate: date });
+                            }
+                          }}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  </Modal>
                 )}
 
                 {showFilterEndDatePicker && (
-                  <DateTimePicker
-                    value={filters.endDate || new Date()}
-                    mode="date"
-                    display="default"
-                    onChange={(event, date) => {
-                      setShowFilterEndDatePicker(Platform.OS === 'ios');
-                      if (date) setFilters({ ...filters, endDate: date });
-                    }}
-                  />
+                  <Modal transparent animationType="fade">
+                    <TouchableOpacity 
+                      style={styles.datePickerOverlay} 
+                      activeOpacity={1} 
+                      onPress={() => setShowFilterEndDatePicker(false)}
+                    >
+                      <View style={styles.datePickerContainer}>
+                        <DateTimePicker
+                          value={filters.endDate || new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+                          onChange={(event, date) => {
+                            if (date) {
+                              setShowFilterEndDatePicker(false);
+                              setFilters({ ...filters, endDate: date });
+                            }
+                          }}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  </Modal>
                 )}
 
                 {/* Filter Tag Picker Modal */}
@@ -1058,6 +1094,32 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#64748B',
+  },
+  // Date Picker Modal Styles
+  datePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  datePickerContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    width: '90%',
+    alignItems: 'center',
+  },
+  doneBtn: {
+    marginTop: 20,
+    backgroundColor: '#3B82F6',
+    paddingHorizontal: 30,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  doneBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16,
   },
 });
 

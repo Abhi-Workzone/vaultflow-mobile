@@ -222,15 +222,17 @@ export const categoryApi = {
   getCategories: async (requestJson = {}, forceRefresh = false) => {
     const now = Date.now();
     // Return cache if it exists and is fresh, unless forceRefresh is true
+    // also add the total count of categories in the response
     if (!forceRefresh && cache.categories && (now - cache.lastFetched.categories < CACHE_DURATION) && !requestJson.searchTerm) {
       console.log('📦 Returning Cached Categories');
-      return { data: { categories: cache.categories }, success: true };
+      return { data: { categories: cache.categories , total: cache.total }, success: true };
     }
     
     const response = await api.post('/v1/public/category/getAll', requestJson);
     if (response?.data?.categories && !requestJson.searchTerm) {
       cache.categories = response.data.categories;
       cache.lastFetched.categories = now;
+      cache.total = response.data.total;
     }
     return response;
   },

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import Card from '../components/Card';
+import { categoryApi, transactionApi } from '../api';
 
 const ProfileScreen = ({ navigation }) => {
   const { user, logout } = useAuth();
@@ -12,6 +13,40 @@ const ProfileScreen = ({ navigation }) => {
   const [darkMode, setDarkMode] = useState(false);
   const [biometric, setBiometric] = useState(true);
   const [autoBackup, setAutoBackup] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    categories: 0,
+    incomeCount: 0,
+    expenseCount: 0
+  });
+
+  React.useEffect(() => {
+    fetchProfileStats();
+  }, []);
+
+  const fetchProfileStats = async () => {
+    try {
+      setLoading(true);
+      const [catRes, incRes, expRes] = await Promise.all([
+        categoryApi.getCategories({ limit: 100 }),
+        transactionApi.getTransactions({ limit: 1, type: 'Income' }),
+        transactionApi.getTransactions({ limit: 1, type: 'Expense' })
+      ]);
+
+      console.log("catRes", catRes);
+      console.log("incRes", incRes);
+      console.log("expRes", expRes);
+      setStats({
+        categories: catRes?.data?.total || 0,
+        incomeCount: incRes?.data?.total || 0,
+        expenseCount: expRes?.data?.total || 0
+      });
+    } catch (error) {
+      console.error('Error fetching profile stats:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const userInfo = {
     name: user?.name || 'User Name',
@@ -71,18 +106,18 @@ const ProfileScreen = ({ navigation }) => {
         {/* User Stats Card */}
         <View style={styles.statsContainer}>
           <View style={styles.statBox}>
-            <Text style={styles.statNumber}>12</Text>
-            <Text style={styles.statLabel}>Active Routines</Text>
+            <Text style={styles.statNumber}>{loading ? '...' : stats.categories}</Text>
+            <Text style={styles.statLabel}>Categories</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statBox}>
-            <Text style={styles.statNumber}>85%</Text>
-            <Text style={styles.statLabel}>Efficiency</Text>
+            <Text style={styles.statNumber}>{loading ? '...' : stats.incomeCount}</Text>
+            <Text style={styles.statLabel}>Incomes</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statBox}>
-            <Text style={styles.statNumber}>48</Text>
-            <Text style={styles.statLabel}>Tasks Done</Text>
+            <Text style={styles.statNumber}>{loading ? '...' : stats.expenseCount}</Text>
+            <Text style={styles.statLabel}>Expenses</Text>
           </View>
         </View>
 
