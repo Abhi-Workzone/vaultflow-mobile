@@ -30,12 +30,16 @@ const TransactionsScreen = () => {
   const [transactions, setTransactions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [tags, setTags] = useState([]);
+  const flatListRef = React.useRef(null);
   
   // Search and Pagination states
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
   const [totalTransactions, setTotalTransactions] = useState(0);
+  const [totalExpenses, setTotalExpenses] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const [showLimitDropdown, setShowLimitDropdown] = useState(false);
 
   // Modal states
@@ -71,14 +75,24 @@ const TransactionsScreen = () => {
   const [showFilterStartDatePicker, setShowFilterStartDatePicker] = useState(false);
   const [showFilterEndDatePicker, setShowFilterEndDatePicker] = useState(false);
   const [isFilterCategoryPickerVisible, setIsFilterCategoryPickerVisible] = useState(false);
+  const [isFilterTagPickerVisible, setIsFilterTagPickerVisible] = useState(false);
 
-  const fetchTransactions = useCallback(async (currentPage = page, currentLimit = limit, query = searchQuery) => {
+  const fetchTransactions = useCallback(async (isInitial = false) => {
+    // Prevent multiple simultaneous fetches for the same data, but allow initial load
+    if (loadingMore || (loading && !isInitial && !refreshing)) return;
+
     try {
-      if (!refreshing) setLoading(true);
+      const currentPage = isInitial ? 1 : page;
+      if (isInitial) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
       const params = {
         page: currentPage,
-        limit: currentLimit,
-        searchTerm: query,
+        limit,
+        searchTerm: searchQuery,
         category: filters.category,
         type: filters.type,
         tags: filters.tags,
@@ -89,8 +103,19 @@ const TransactionsScreen = () => {
       const response = await transactionApi.getTransactions(params);
       
       if (response && response.data) {
-        setTransactions(response.data.transactions || []);
+        const newTransactions = response.data.transactions || [];
+        if (currentPage === 1) {
+          setTransactions(newTransactions);
+        } else {
+          // Append only if these are new items to avoid duplicates
+          setTransactions(prev => {
+            const existingIds = new Set(prev.map(t => t._id));
+            const filteredNew = newTransactions.filter(t => !existingIds.has(t._id));
+            return [...prev, ...filteredNew];
+          });
+        }
         setTotalTransactions(response.data.total || 0);
+        setTotalExpenses(response.data.totalExpanses || 0);
       }
     } catch (error) {
       console.error('Error fetching transactions:', error);
@@ -98,14 +123,40 @@ const TransactionsScreen = () => {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
-  }, [page, limit, searchQuery, filters, refreshing]);
+  }, [page, limit, searchQuery, filters, refreshing, loading, loadingMore]);
 
-  const fetchDependencies = async () => {
+  const handleLoadMore = () => {
+    if (!loading && !loadingMore && transactions.length < totalTransactions) {
+      setPage(prev => prev + 1);
+    }
+  };
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchDependencies(true); // Force refresh cache on pull-to-refresh
+    if (page === 1) {
+      fetchTransactions(true);
+    } else {
+      setPage(1);
+    }
+  };
+
+  const handleScroll = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    setShowBackToTop(offsetY > 500);
+  };
+
+  const scrollToTop = () => {
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  };
+
+  const fetchDependencies = async (forceRefresh = false) => {
     try {
       const [catRes, tagRes] = await Promise.all([
-        categoryApi.getCategories({ limit: 100 }),
-        tagApi.getTags()
+        categoryApi.getCategories({ limit: 100 }, forceRefresh),
+        tagApi.getTags(forceRefresh)
       ]);
       
       // Handle both { data: { categories } } and { categories } structures
@@ -120,30 +171,25 @@ const TransactionsScreen = () => {
     }
   };
 
+  // Main fetch effect
   useEffect(() => {
-    fetchTransactions();
+    // If it's a fresh search or filter, we should have reset the page to 1
+    // This effect handles all data loading based on state changes
+    fetchTransactions(page === 1);
   }, [page, limit, filters]);
 
   useEffect(() => {
     fetchDependencies();
   }, []);
 
-  // Debounced search effect
+  // Debounced search effect - ONLY resets page to 1
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (page !== 1) {
-        setPage(1);
-      } else {
-        fetchTransactions(1, limit, searchQuery);
-      }
+      setPage(1);
+      // The main fetch effect above will pick up the page=1 change and trigger the fetch
     }, 500);
     return () => clearTimeout(timer);
   }, [searchQuery]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    setPage(1);
-  };
 
   const handleOpenModal = (transaction = null) => {
     setShowCategoryList(false);
@@ -197,7 +243,9 @@ const TransactionsScreen = () => {
       if (response) {
         showToast.success('Success', `Transaction ${editingTransaction ? 'updated' : 'created'} successfully`);
         setIsModalVisible(false);
-        fetchTransactions(1);
+        // Refresh by resetting to page 1
+        if (page === 1) fetchTransactions(true);
+        else setPage(1);
       }
     } catch (error) {
       showToast.error('Error', error.response?.data?.message || 'Failed to save transaction');
@@ -376,8 +424,26 @@ const TransactionsScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={styles.container} edges={[]}>
       {renderHeader()}
+
+      {/* Summary Header */}
+      {!loading && transactions.length > 0 && (
+        <View style={styles.summaryContainer}>
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryIconBox}>
+              <Ionicons name="receipt-outline" size={24} color="#EF4444" />
+            </View>
+            <View>
+              <Text style={styles.summaryLabel}>Total Expenses</Text>
+              <Text style={styles.summaryValue}>₹{totalExpenses.toLocaleString()}</Text>
+            </View>
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{totalTransactions} Items</Text>
+            </View>
+          </View>
+        </View>
+      )}
 
       {loading && !refreshing && transactions.length === 0 ? (
         <View style={styles.centerContainer}>
@@ -385,13 +451,24 @@ const TransactionsScreen = () => {
         </View>
       ) : (
         <FlatList
+          ref={flatListRef}
           data={transactions}
           renderItem={renderTransactionItem}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item, index) => item._id || index.toString()}
           contentContainerStyle={styles.listContent}
+          onScroll={handleScroll}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3B82F6']} />
           }
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={() => (
+            loadingMore ? (
+              <View style={styles.loadMoreContainer}>
+                <ActivityIndicator size="small" color="#3B82F6" />
+              </View>
+            ) : null
+          )}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Ionicons name="receipt-outline" size={60} color="#DBEAFE" />
@@ -399,8 +476,13 @@ const TransactionsScreen = () => {
               <Text style={styles.emptySubtitle}>Try adjusting your search or filters.</Text>
             </View>
           }
-          ListFooterComponent={renderFooter}
         />
+      )}
+
+      {showBackToTop && (
+        <TouchableOpacity style={styles.backToTopBtn} onPress={scrollToTop}>
+          <Ionicons name="arrow-up" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
       )}
 
       <TouchableOpacity style={styles.fab} onPress={() => handleOpenModal()}>
@@ -660,23 +742,15 @@ const TransactionsScreen = () => {
                 </TouchableOpacity>
 
                 <Text style={styles.label}>Tag</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modeScroll}>
-                  <TouchableOpacity 
-                    style={[styles.modePill, !filters.tags && styles.modePillActive]}
-                    onPress={() => setFilters({ ...filters, tags: '' })}
-                  >
-                    <Text style={[styles.modePillText, !filters.tags && styles.modePillTextActive]}>All</Text>
-                  </TouchableOpacity>
-                  {tags.map((tag) => (
-                    <TouchableOpacity 
-                      key={tag}
-                      style={[styles.modePill, filters.tags === tag && styles.modePillActive]}
-                      onPress={() => setFilters({ ...filters, tags: tag })}
-                    >
-                      <Text style={[styles.modePillText, filters.tags === tag && styles.modePillTextActive]}>{tag}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                <TouchableOpacity 
+                  style={styles.dropdownTrigger} 
+                  onPress={() => setIsFilterTagPickerVisible(true)}
+                >
+                  <Text style={[styles.dropdownText, !filters.tags && { color: '#94A3B8' }]}>
+                    {filters.tags || 'Select Tag'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={20} color="#64748B" />
+                </TouchableOpacity>
 
                 <View style={styles.row}>
                   <View style={{ flex: 1, marginRight: 8 }}>
@@ -723,11 +797,50 @@ const TransactionsScreen = () => {
                   />
                 )}
 
+                {/* Filter Tag Picker Modal */}
+                {isFilterTagPickerVisible && (
+                  <Modal visible={isFilterTagPickerVisible} transparent animationType="slide">
+                    <View style={styles.modalOverlay}>
+                      <View style={[styles.modalContent, { height: '60%' }]}>
+                        <View style={styles.modalHeader}>
+                          <Text style={styles.modalTitle}>Select Tag</Text>
+                          <TouchableOpacity onPress={() => setIsFilterTagPickerVisible(false)}>
+                            <Ionicons name="close" size={24} color="#64748B" />
+                          </TouchableOpacity>
+                        </View>
+                        <FlatList
+                          data={['all_tags_option', ...tags]}
+                          keyExtractor={(item, index) => `tag-${item}-${index}`}
+                          renderItem={({ item }) => (
+                            <TouchableOpacity 
+                              style={styles.categoryItem} 
+                              onPress={() => {
+                                setFilters({ ...filters, tags: item === 'all_tags_option' ? '' : item });
+                                setIsFilterTagPickerVisible(false);
+                              }}
+                            >
+                              <Text style={[styles.categoryItemText, (filters.tags === item || (item === 'all_tags_option' && !filters.tags)) && { color: '#3B82F6', fontWeight: '700' }]}>
+                                {item === 'all_tags_option' ? 'All Tags' : item}
+                              </Text>
+                              {(filters.tags === item || (item === 'all_tags_option' && !filters.tags)) && <Ionicons name="checkmark" size={20} color="#3B82F6" />}
+                            </TouchableOpacity>
+                          )}
+                        />
+                      </View>
+                    </View>
+                  </Modal>
+                )}
+
                 <View style={[styles.modalFooter, { marginTop: 40 }]}>
                   <TouchableOpacity 
                     style={styles.cancelBtn} 
                     onPress={() => {
                       setFilters({ category: '', tags: '', startDate: null, endDate: null, type: '' });
+                      if (page === 1) {
+                        fetchTransactions(true);
+                      } else {
+                        setPage(1);
+                      }
                       setIsFilterModalVisible(false);
                     }}
                   >
@@ -872,6 +985,79 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontWeight: '700',
     marginLeft: 8,
+  },
+  loadMoreContainer: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  backToTopBtn: {
+    position: 'absolute',
+    bottom: 100,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(59, 130, 246, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  // New Summary Styles
+  summaryContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    backgroundColor: '#F8FAFC',
+  },
+  summaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  summaryIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#FEF2F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  summaryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  summaryValue: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#1E293B',
+  },
+  countBadge: {
+    marginLeft: 'auto',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  countText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
   },
 });
 

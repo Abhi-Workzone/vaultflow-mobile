@@ -284,24 +284,38 @@ const DashboardScreen = ({ navigation }) => {
 
       {/* Date Picker Modal */}
       {showDatePicker && (
-        <DateTimePicker
-          value={new Date(month + '-01')}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(event, date) => {
-            setShowDatePicker(false);
-            if (date) {
-              const newMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-              setMonth(newMonth);
-            }
-          }}
-        />
+        <Modal transparent animationType="fade">
+          <TouchableOpacity 
+            style={styles.datePickerOverlay} 
+            activeOpacity={1} 
+            onPress={() => setShowDatePicker(false)}
+          >
+            <TouchableOpacity activeOpacity={1} style={styles.datePickerContainer}>
+              <DateTimePicker
+                value={new Date(month + '-01')}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(event, date) => {
+                  if (date) {
+                    setShowDatePicker(false);
+                    const newMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                    setMonth(newMonth);
+                  }
+                }}
+              />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
       )}
 
       {/* Category Details Modal */}
       <Modal visible={isModalOpen} animationType="slide" transparent onRequestClose={() => setIsModalOpen(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setIsModalOpen(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalTitle}>{selectedCategory?._id}</Text>
@@ -339,8 +353,8 @@ const DashboardScreen = ({ navigation }) => {
               <Text style={styles.totalLabel}>Total Spent</Text>
               <Text style={styles.totalValue}>₹{selectedCategory?.totalSpent.toLocaleString()}</Text>
             </View>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );
@@ -410,10 +424,10 @@ const styles = StyleSheet.create({
   barValue: { fontSize: 14, fontWeight: '700', color: '#1E293B' },
   barBackground: { height: 8, backgroundColor: '#F1F5F9', borderRadius: 4, overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: 4 },
-  emptyChart: { height: 150, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFFFF', marginHorizontal: 20, borderRadius: 24, borderStyle: 'dashed', borderWidth: 1, borderColor: '#CBD5E1' },
+  emptyChart: { height: 150, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFFFF', marginHorizontal: 20, marginBottom:20, borderRadius: 24, borderStyle: 'dashed', borderWidth: 1, borderColor: '#CBD5E1' },
   emptyText: { color: '#94A3B8', marginTop: 8, fontSize: 14 },
 
-  recentSection: { paddingHorizontal: 20, marginBottom: 40 },
+  recentSection: { paddingHorizontal: 20, marginBottom: 10 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   seeAll: { color: '#3B82F6', fontWeight: '700' },
   transItem: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
@@ -456,6 +470,22 @@ const styles = StyleSheet.create({
   },
   overallLabel: { fontSize: 10, color: '#64748B', fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
   overallValue: { fontSize: 14, fontWeight: '800' },
+
+  // Date Picker Modal Styles
+  datePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  datePickerContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    padding: 24,
+    width: '100%',
+    alignItems: 'center',
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+  },
 });
 
 export default DashboardScreen;

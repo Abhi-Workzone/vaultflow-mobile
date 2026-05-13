@@ -28,6 +28,9 @@ const CategoriesScreen = () => {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
   const [totalCategories, setTotalCategories] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const flatListRef = React.useRef(null);
   
   // Modal states
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -37,19 +40,37 @@ const CategoriesScreen = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showLimitDropdown, setShowLimitDropdown] = useState(false);
 
-  const fetchCategories = useCallback(async (currentPage = page, currentLimit = limit, query = searchQuery) => {
+  const fetchCategories = useCallback(async (isInitial = false) => {
+    // Prevent multiple simultaneous fetches for the same data, but allow initial load
+    if (loadingMore || (loading && !isInitial && !refreshing)) return;
+
     try {
-      if (!refreshing) setLoading(true);
+      const currentPage = isInitial ? 1 : page;
+      if (isInitial) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
       const params = {
         page: currentPage,
-        limit: currentLimit,
-        searchTerm: query,
+        limit,
+        searchTerm: searchQuery,
       };
       
       const response = await categoryApi.getCategories(params);
       
       if (response && response.data) {
-        setCategories(response.data.categories || []);
+        const newCategories = response.data.categories || [];
+        if (currentPage === 1) {
+          setCategories(newCategories);
+        } else {
+          setCategories(prev => {
+            const existingIds = new Set(prev.map(c => c._id));
+            const filteredNew = newCategories.filter(c => !existingIds.has(c._id));
+            return [...prev, ...filteredNew];
+          });
+        }
         setTotalCategories(response.data.total || response.data.categories?.length || 0);
       }
     } catch (error) {
@@ -58,21 +79,24 @@ const CategoriesScreen = () => {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
-  }, [page, limit, searchQuery, refreshing]);
+  }, [page, limit, searchQuery, refreshing, loading, loadingMore]);
+
+  const handleLoadMore = () => {
+    if (!loading && !loadingMore && categories.length < totalCategories) {
+      setPage(prev => prev + 1);
+    }
+  };
 
   useEffect(() => {
-    fetchCategories();
+    fetchCategories(page === 1);
   }, [page, limit]);
 
   // Debounced search effect
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (page !== 1) {
-        setPage(1);
-      } else {
-        fetchCategories(1, limit, searchQuery);
-      }
+      setPage(1);
     }, 500);
     return () => clearTimeout(timer);
   }, [searchQuery]);
@@ -80,10 +104,19 @@ const CategoriesScreen = () => {
   const onRefresh = () => {
     setRefreshing(true);
     if (page === 1) {
-      fetchCategories(1, limit, searchQuery);
+      fetchCategories(true); // Passes forceRefresh internally through page logic
     } else {
       setPage(1);
     }
+  };
+
+  const handleScroll = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    setShowBackToTop(offsetY > 400);
+  };
+
+  const scrollToTop = () => {
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
   };
 
   const handleAddCategory = async () => {
@@ -271,36 +304,14 @@ const CategoriesScreen = () => {
   );
 
   const renderFooter = () => {
-    if (totalPages <= 1 && categories.length === 0) return null;
-
-    return (
-      <View style={styles.footerContainer}>
-        {totalPages > 1 && (
-          <View style={styles.paginationContainer}>
-            <TouchableOpacity
-              style={[styles.paginationButton, page === 1 && styles.paginationButtonDisabled]}
-              onPress={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              <Ionicons name="chevron-back" size={20} color={page === 1 ? '#9CA3AF' : '#3B82F6'} />
-            </TouchableOpacity>
-            
-            <View style={styles.pageIndicator}>
-              <Text style={styles.pageText}>Page {page} of {totalPages}</Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.paginationButton, page === totalPages && styles.paginationButtonDisabled]}
-              onPress={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-            >
-              <Ionicons name="chevron-forward" size={20} color={page === totalPages ? '#9CA3AF' : '#3B82F6'} />
-            </TouchableOpacity>
-          </View>
-        )}
-        <View style={{ height: 80 }} />
-      </View>
-    );
+    if (loadingMore) {
+      return (
+        <View style={styles.loadMoreContainer}>
+          <ActivityIndicator size="small" color="#3B82F6" />
+        </View>
+      );
+    }
+    // return <View style={{ height: 10 }} />;
   };
 
   const renderEmpty = () => {
@@ -319,7 +330,7 @@ const CategoriesScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={styles.container} edges={[]}>
       {renderHeader()}
 
       {loading && !refreshing && categories.length === 0 ? (
@@ -328,17 +339,27 @@ const CategoriesScreen = () => {
         </View>
       ) : (
         <FlatList
+          ref={flatListRef}
           data={categories}
           renderItem={renderCategoryItem}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item, index) => item._id || index.toString()}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={renderFooter}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3B82F6']} />
           }
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
+          onScroll={handleScroll}
           showsVerticalScrollIndicator={false}
         />
+      )}
+
+      {showBackToTop && (
+        <TouchableOpacity style={styles.backToTopBtn} onPress={scrollToTop}>
+          <Ionicons name="arrow-up" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
       )}
 
       {/* Floating Action Button */}
@@ -562,7 +583,7 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     bottom: 30,
-    right: 25,
+    right: 20,
     width: 60,
     height: 60,
     borderRadius: 30,
@@ -711,6 +732,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  loadMoreContainer: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  backToTopBtn: {
+    position: 'absolute',
+    bottom: 100,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(59, 130, 246, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
   },
 });
 

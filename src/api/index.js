@@ -12,6 +12,23 @@ let isRefreshing = false;
 let failedQueue = [];
 let navigationRef = null;
 
+// Memory Cache for static data
+let cache = {
+  categories: null,
+  tags: null,
+  lastFetched: {
+    categories: 0,
+    tags: 0
+  }
+};
+
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
+
+// Initialize token from storage immediately
+AsyncStorage.getItem('token').then(token => {
+  if (token) memoizedToken = token;
+});
+
 // Export function to set navigation reference
 export const setNavigationRef = (navigation) => {
   navigationRef = navigation;
@@ -31,21 +48,22 @@ const processQueue = (error, token = null) => {
 
 // Add token to requests
 api.interceptors.request.use(async (config) => {
-  const token = memoizedToken || await AsyncStorage.getItem('token');
-  
-  console.log('🚀 API Request:', {
-    method: config.method?.toUpperCase(),
-    url: config.url,
-    baseURL: config.baseURL,
-    hasToken: !!token,
-    headers: config.headers,
-    body: config.data || null,
-  });
+  // Use memory token if available, otherwise hit storage
+  let token = memoizedToken;
+  if (!token) {
+    token = await AsyncStorage.getItem('token');
+    memoizedToken = token;
+  }
   
   if (token) {
-    memoizedToken = token;
-    config.headers.Authorization = token; // Remove Bearer prefix
+    config.headers.Authorization = token;
   }
+  
+  // Minimal logging in production for speed
+  if (__DEV__) {
+    console.log(`🚀 ${config.method?.toUpperCase()} ${config.url}`);
+  }
+  
   return config;
 });
 
@@ -95,16 +113,23 @@ api.interceptors.response.use(
       console.log('🔄 Starting Token Refresh Process...');
 
       try {
-        // Call refresh API with current token
+        // Call refresh API with current token using a CLEAN axios instance
+        // to avoid interceptor loops
         console.log('📞 Calling Refresh API...');
-        const response = await api.get('/v1/auth/refresh-access-token', {
+        const refreshApi = axios.create({ baseURL: api.defaults.baseURL });
+        const response = await refreshApi.get('/v1/auth/refresh-access-token', {
           headers: {
-            Authorization: memoizedToken || await AsyncStorage.getItem('token') // Remove Bearer prefix
-          }
+            Authorization: memoizedToken || await AsyncStorage.getItem('token')
+          },
+          withCredentials: true
         });
 
-        const newAccessToken = response.data.accessToken;
-        const refreshedUser = response.data.user || {};
+        // Since this is a fresh axios instance, it returns the full response object
+        // but if we used the intercepted one, it would return data.
+        // Let's be safe and check both.
+        const data = response.data || response;
+        const newAccessToken = data.accessToken;
+        const refreshedUser = data.user || {};
         
         console.log('✅ Token Refresh Successful:', {
           newTokenLength: newAccessToken.length,
@@ -194,10 +219,33 @@ export const dashboardApi = {
 };
 
 export const categoryApi = {
-  getCategories: (requestJson = {}) => api.post('/v1/public/category/getAll', requestJson),
-  createCategory: (requestJson = {}) => api.post('/v1/public/category/create', requestJson),
-  updateCategory: (requestJson = {}) => api.post('/v1/public/category/update', requestJson),
-  deleteCategory: (requestJson = {}) => api.post('/v1/public/category/delete', requestJson),
+  getCategories: async (requestJson = {}, forceRefresh = false) => {
+    const now = Date.now();
+    // Return cache if it exists and is fresh, unless forceRefresh is true
+    if (!forceRefresh && cache.categories && (now - cache.lastFetched.categories < CACHE_DURATION) && !requestJson.searchTerm) {
+      console.log('📦 Returning Cached Categories');
+      return { data: { categories: cache.categories }, success: true };
+    }
+    
+    const response = await api.post('/v1/public/category/getAll', requestJson);
+    if (response?.data?.categories && !requestJson.searchTerm) {
+      cache.categories = response.data.categories;
+      cache.lastFetched.categories = now;
+    }
+    return response;
+  },
+  createCategory: (requestJson = {}) => {
+    cache.categories = null; // Invalidate cache on change
+    return api.post('/v1/public/category/create', requestJson);
+  },
+  updateCategory: (requestJson = {}) => {
+    cache.categories = null;
+    return api.post('/v1/public/category/update', requestJson);
+  },
+  deleteCategory: (requestJson = {}) => {
+    cache.categories = null;
+    return api.post('/v1/public/category/delete', requestJson);
+  },
 };
 
 export const transactionApi = {
@@ -209,7 +257,20 @@ export const transactionApi = {
 };
 
 export const tagApi = {
-  getTags: (requestJson = {}) => api.post('/v1/public/transaction/getTags', requestJson),
+  getTags: async (forceRefresh = false) => {
+    const now = Date.now();
+    if (!forceRefresh && cache.tags && (now - cache.lastFetched.tags < CACHE_DURATION)) {
+      console.log('📦 Returning Cached Tags');
+      return cache.tags;
+    }
+
+    const response = await api.post('/v1/public/transaction/getTags', {});
+    if (response) {
+      cache.tags = response;
+      cache.lastFetched.tags = now;
+    }
+    return response;
+  },
 };
 
 
