@@ -1,418 +1,744 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Modal, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  Modal,
+  TextInput,
+  Alert,
+  Dimensions,
+  RefreshControl,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { transactionApi, tagApi, categoryApi } from '../api';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { transactionApi, categoryApi, tagApi } from '../api';
+import Header from '../components/Header';
+import { showToast } from '../utils/toast';
+
+const { width } = Dimensions.get('window');
 
 const TransactionsScreen = () => {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [transactions, setTransactions] = useState([]);
-  const [tags, setTags] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [filter, setFilter] = useState('all');
+  const [tags, setTags] = useState([]);
+  
+  // Search and Pagination states
   const [searchQuery, setSearchQuery] = useState('');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(10);
+  const [totalTransactions, setTotalTransactions] = useState(0);
+  const [showLimitDropdown, setShowLimitDropdown] = useState(false);
+
+  // Modal states
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
+  const [showCategoryList, setShowCategoryList] = useState(false);
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
   const [editingTransaction, setEditingTransaction] = useState(null);
-  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Form states
+  const [form, setForm] = useState({
+    type: 'Expense',
+    amount: '',
+    category: '',
+    paymentMode: 'UPI',
+    date: new Date(),
+    tags: [],
+    note: '',
+  });
+  const [tagInput, setTagInput] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // Filter states
   const [filters, setFilters] = useState({
     category: '',
-    startDate: '',
-    endDate: '',
-    tags: ''
+    startDate: null,
+    endDate: null,
+    type: '',
+    tags: '',
   });
-  const [totalCount, setTotalCount] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [limit, setLimit] = useState(10);
 
-  useEffect(() => {
-    fetchTransactions();
-    fetchTags();
-    fetchCategories();
-  }, []);
+  const [showFilterStartDatePicker, setShowFilterStartDatePicker] = useState(false);
+  const [showFilterEndDatePicker, setShowFilterEndDatePicker] = useState(false);
+  const [isFilterCategoryPickerVisible, setIsFilterCategoryPickerVisible] = useState(false);
 
-  useEffect(() => {
-    fetchTransactions();
-  }, [currentPage, searchQuery, filters]);
-
-  const fetchTransactions = async () => {
+  const fetchTransactions = useCallback(async (currentPage = page, currentLimit = limit, query = searchQuery) => {
     try {
-      setLoading(true);
+      if (!refreshing) setLoading(true);
       const params = {
         page: currentPage,
-        limit: limit,
-        searchTerm: searchQuery,
+        limit: currentLimit,
+        searchTerm: query,
         category: filters.category,
+        type: filters.type,
         tags: filters.tags,
-        startDate: filters.startDate,
-        endDate: filters.endDate
+        startDate: filters.startDate ? filters.startDate.toISOString().split('T')[0] : undefined,
+        endDate: filters.endDate ? filters.endDate.toISOString().split('T')[0] : undefined,
       };
-      console.log('📞 Fetching Transactions with params:', params);
+      
       const response = await transactionApi.getTransactions(params);
-      console.log('📊 Transactions Count:', response?.data?.transactions?.length);
-      console.log('📊 Total Count:', response?.data?.total);
       
-      const transactionsArray = response?.data?.transactions || [];
-      setTransactions(transactionsArray);
-      setTotalCount(response?.data?.total || 0);
-      
-      if (transactionsArray.length === 0) {
-        console.log('⚠️ No transactions found');
+      if (response && response.data) {
+        setTransactions(response.data.transactions || []);
+        setTotalTransactions(response.data.total || 0);
       }
     } catch (error) {
       console.error('Error fetching transactions:', error);
+      showToast.error('Error', 'Failed to fetch transactions');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [page, limit, searchQuery, filters, refreshing]);
 
-  const fetchTags = async () => {
+  const fetchDependencies = async () => {
     try {
-      const response = await tagApi.getTags();
-      setTags(response || []);
+      const [catRes, tagRes] = await Promise.all([
+        categoryApi.getCategories({ limit: 100 }),
+        tagApi.getTags()
+      ]);
+      
+      // Handle both { data: { categories } } and { categories } structures
+      const fetchedCategories = catRes?.data?.categories || catRes?.categories || [];
+      console.log('Fetched Categories:', fetchedCategories.length);
+      setCategories(fetchedCategories);
+      
+      // Handle tags (usually returns array directly or inside data)
+      setTags(Array.isArray(tagRes) ? tagRes : (tagRes?.data || []));
     } catch (error) {
-      console.error('Error fetching tags:', error);
+      console.error('Error fetching dependencies:', error);
     }
   };
 
-  const fetchCategories = async () => {
+  useEffect(() => {
+    fetchTransactions();
+  }, [page, limit, filters]);
+
+  useEffect(() => {
+    fetchDependencies();
+  }, []);
+
+  // Debounced search effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        fetchTransactions(1, limit, searchQuery);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    setPage(1);
+  };
+
+  const handleOpenModal = (transaction = null) => {
+    setShowCategoryList(false);
+    if (transaction) {
+      setEditingTransaction(transaction);
+      setForm({
+        type: transaction.type || 'Expense',
+        amount: transaction.amount?.toString() || '',
+        category: transaction.category?._id || transaction.category || '',
+        paymentMode: transaction.paymentMode || 'UPI',
+        date: transaction.date ? new Date(transaction.date) : new Date(),
+        tags: transaction.tags || [],
+        note: transaction.note || '',
+      });
+    } else {
+      setEditingTransaction(null);
+      setForm({
+        type: 'Expense',
+        amount: '',
+        category: '',
+        paymentMode: 'UPI',
+        date: new Date(),
+        tags: [],
+        note: '',
+      });
+    }
+    setIsModalVisible(true);
+  };
+
+  const handleSaveTransaction = async () => {
+    if (!form.amount || !form.category || !form.type) {
+      showToast.error('Validation', 'Please fill in all required fields');
+      return;
+    }
+
     try {
-      const response = await categoryApi.getCategories({ limit: 100 });
-      const categoriesArray = response?.categories || [];
-      setCategories(categoriesArray);
+      setIsSubmitting(true);
+      const data = {
+        ...form,
+        amount: parseFloat(form.amount),
+        date: form.date.toISOString(),
+      };
+
+      let response;
+      if (editingTransaction) {
+        response = await transactionApi.updateTransaction({ id: editingTransaction._id, ...data });
+      } else {
+        response = await transactionApi.createTransaction(data);
+      }
+
+      if (response) {
+        showToast.success('Success', `Transaction ${editingTransaction ? 'updated' : 'created'} successfully`);
+        setIsModalVisible(false);
+        fetchTransactions(1);
+      }
     } catch (error) {
-      console.error('Error fetching categories:', error);
+      showToast.error('Error', error.response?.data?.message || 'Failed to save transaction');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleEditTransaction = (transaction) => {
-    setEditingTransaction(transaction);
-    setShowEditModal(true);
-  };
-
-  const handleAddTransaction = () => {
-    setShowAddModal(true);
-  };
-
-  const handleFilterPress = () => {
-    setShowFilterModal(true);
-  };
-
-  const handleApplyFilters = () => {
-    setCurrentPage(1);
-    fetchTransactions();
-    setShowFilterModal(false);
-  };
-
-  const handleClearFilters = () => {
-    setFilters({
-      category: '',
-      startDate: '',
-      endDate: '',
-      tags: ''
-    });
-    setCurrentPage(1);
-    fetchTransactions();
-    setShowFilterModal(false);
-  };
-
-  const totalIncome = (transactions || [])
-    .filter(t => t.type === 'income')
-    .reduce((sum, t) => sum + (t.amount || 0), 0);
-    
-  const totalExpenses = (transactions || [])
-    .filter(t => t.type === 'expense')
-    .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3B82F6" />
-          <Text style={styles.loadingText}>Loading transactions...</Text>
-        </View>
-      </SafeAreaView>
+  const handleDeleteTransaction = (transaction) => {
+    Alert.alert(
+      'Delete Transaction',
+      'Are you sure you want to delete this transaction?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await transactionApi.deleteTransaction({ id: transaction._id });
+              showToast.success('Deleted', 'Transaction removed successfully');
+              fetchTransactions();
+            } catch (error) {
+              showToast.error('Error', 'Failed to delete transaction');
+            }
+          },
+        },
+      ]
     );
-  }
+  };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      {/* Header with Search and Total */}
-      <View style={styles.headerContainer}>
-        <View style={styles.searchContainer}>
-          <View style={styles.searchBox}>
-            <Ionicons name="search" size={20} color="#6B7280" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search transactions..."
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onSubmitEditing={fetchTransactions}
-            />
-          </View>
-          <TouchableOpacity style={styles.filterButton} onPress={handleFilterPress}>
-            <Ionicons name="filter" size={20} color="#3B82F6" />
-          </TouchableOpacity>
+  const addTag = () => {
+    if (tagInput.trim() && !form.tags.includes(tagInput.trim())) {
+      setForm({ ...form, tags: [...form.tags, tagInput.trim()] });
+      setTagInput('');
+    }
+  };
+
+  const removeTag = (tag) => {
+    setForm({ ...form, tags: form.tags.filter(t => t !== tag) });
+  };
+
+  const formatDate = (date) => {
+    if (!date) return 'N/A';
+    const d = new Date(date);
+    return d.toLocaleDateString('en-US', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const totalPages = Math.ceil(totalTransactions / limit) || 1;
+
+  const renderTransactionItem = ({ item }) => (
+    <View style={styles.transactionCard}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.typeIconContainer, { backgroundColor: item.type === 'Income' ? '#ECFDF5' : '#FEF2F2' }]}>
+          <Ionicons 
+            name={item.type === 'Income' ? 'arrow-down' : 'arrow-up'} 
+            size={20} 
+            color={item.type === 'Income' ? '#10B981' : '#EF4444'} 
+          />
         </View>
-        <View style={styles.totalContainer}>
-          <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalAmount}>${(totalIncome - totalExpenses).toFixed(2)}</Text>
+        <View style={styles.cardTitleSection}>
+          <Text style={styles.transactionTitle}>{item.category?.name || 'Uncategorized'}</Text>
+          <Text style={styles.transactionDate}>{formatDate(item.date)}</Text>
+        </View>
+        <View style={styles.amountSection}>
+          <Text style={[styles.amountText, { color: item.type === 'Income' ? '#10B981' : '#EF4444' }]}>
+            {item.type === 'Income' ? '+' : '-'}${Math.abs(item.amount).toFixed(2)}
+          </Text>
+          <Text style={styles.paymentModeText}>{item.paymentMode}</Text>
         </View>
       </View>
+      
+      {item.note ? (
+        <View style={styles.noteSection}>
+          <Text style={styles.noteText} numberOfLines={1}>{item.note}</Text>
+        </View>
+      ) : null}
 
-      {/* Quick Filters */}
-      <View style={styles.quickFiltersContainer}>
+      {item.tags && item.tags.length > 0 ? (
+        <View style={styles.tagsDisplay}>
+          {item.tags.map((tag, i) => (
+            <View key={i} style={styles.displayTag}>
+              <Text style={styles.displayTagText}>{tag}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.cardActions}>
+        <TouchableOpacity style={styles.cardActionBtn} onPress={() => handleOpenModal(item)}>
+          <Ionicons name="create-outline" size={18} color="#3B82F6" />
+          <Text style={styles.cardActionText}>Edit</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.cardActionBtn} onPress={() => handleDeleteTransaction(item)}>
+          <Ionicons name="trash-outline" size={18} color="#EF4444" />
+          <Text style={[styles.cardActionText, { color: '#EF4444' }]}>Delete</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <Header title="Transactions" />
+      <View style={styles.searchSection}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search-outline" size={20} color="#6B7280" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
         <TouchableOpacity 
-          style={[styles.quickFilter, filter === 'all' && styles.quickFilterActive]}
-          onPress={() => setFilter('all')}
+          style={styles.limitSelector}
+          onPress={() => setShowLimitDropdown(!showLimitDropdown)}
         >
-          <Text style={[styles.quickFilterText, filter === 'all' && styles.quickFilterTextActive]}>All</Text>
+          <Text style={styles.limitText}>{limit}</Text>
+          <Ionicons name="chevron-down" size={16} color="#64748B" />
         </TouchableOpacity>
         <TouchableOpacity 
-          style={[styles.quickFilter, filter === 'income' && styles.quickFilterActive]}
-          onPress={() => setFilter('income')}
+          style={[styles.filterBtn, (filters.category || filters.type || filters.startDate) && styles.filterBtnActive]}
+          onPress={() => setIsFilterModalVisible(true)}
         >
-          <Text style={[styles.quickFilterText, filter === 'income' && styles.quickFilterTextActive]}>Income</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.quickFilter, filter === 'expense' && styles.quickFilterActive]}
-          onPress={() => setFilter('expense')}
-        >
-          <Text style={[styles.quickFilterText, filter === 'expense' && styles.quickFilterTextActive]}>Expenses</Text>
+          <Ionicons name="filter-outline" size={20} color={filters.category || filters.type || filters.startDate ? "#FFFFFF" : "#64748B"} />
         </TouchableOpacity>
       </View>
 
-      {/* Transactions List */}
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {transactions.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Ionicons name="receipt-outline" size={48} color="#9CA3AF" />
-            <Text style={styles.emptyStateTitle}>No Transactions Found</Text>
-            <Text style={styles.emptyStateDescription}>
-              Try adjusting your search or filters, or add your first transaction!
-            </Text>
-          </View>
-        ) : (
-          transactions.map((transaction, index) => (
-            <TouchableOpacity key={transaction._id || index} style={styles.transactionCard}>
-              {/* Header Row */}
-              <View style={styles.cardHeader}>
-                <View style={styles.cardLeft}>
-                  <View style={[styles.typeIcon, { backgroundColor: transaction.type === 'income' ? '#10B981' : '#EF4444' }]}>
-                    <Ionicons 
-                      name={transaction.type === 'income' ? 'arrow-down' : 'arrow-up'} 
-                      size={16} 
-                      color="#FFFFFF" 
-                    />
-                  </View>
-                  <View style={styles.transactionInfo}>
-                    <Text style={styles.transactionDescription} numberOfLines={2}>
-                      {transaction.description || 'Transaction'}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.cardRight}>
-                  <Text style={[
-                    styles.transactionAmount,
-                    transaction.type === 'income' ? styles.incomeAmount : styles.expenseAmount
-                  ]}>
-                    {transaction.type === 'income' ? '+' : '-'}${Math.abs(transaction.amount || 0).toFixed(2)}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Details Row */}
-              <View style={styles.cardDetails}>
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="calendar-outline" size={14} color="#6B7280" />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Date</Text>
-                    <Text style={styles.detailValue}>
-                      {new Date(transaction.createdAt || transaction.date).toLocaleDateString()}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="swap-horizontal-outline" size={14} color="#6B7280" />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Type</Text>
-                    <Text style={[
-                      styles.detailValue,
-                      transaction.type === 'income' ? styles.incomeText : styles.expenseText
-                    ]}>
-                      {transaction.type}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="folder-outline" size={14} color="#6B7280" />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Category</Text>
-                    <Text style={styles.detailValue}>
-                      {transaction.category?.name || transaction.category || 'Uncategorized'}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="card-outline" size={14} color="#6B7280" />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Payment Mode</Text>
-                    <Text style={styles.detailValue}>
-                      {transaction.paymentMode || 'N/A'}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="pricetag-outline" size={14} color="#6B7280" />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Tags</Text>
-                    <Text style={styles.detailValue}>
-                      {transaction.tags && transaction.tags.length > 0 
-                        ? transaction.tags.join(', ')
-                        : 'None'
-                      }
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="document-text-outline" size={14} color="#6B7280" />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Note</Text>
-                    <Text style={styles.detailValue}>
-                      {transaction.note || 'No note'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Edit Button */}
-              <TouchableOpacity 
-                style={styles.editCardButton}
-                onPress={() => handleEditTransaction(transaction)}
-              >
-                <Ionicons name="create-outline" size={14} color="#3B82F6" />
-              </TouchableOpacity>
+      {showLimitDropdown && (
+        <View style={styles.limitDropdown}>
+          {[10, 20, 50].map((val) => (
+            <TouchableOpacity 
+              key={val} 
+              style={styles.limitOption}
+              onPress={() => {
+                setLimit(val);
+                setPage(1);
+                setShowLimitDropdown(false);
+              }}
+            >
+              <Text style={[styles.limitOptionText, limit === val && styles.limitOptionTextActive]}>{val} items</Text>
             </TouchableOpacity>
-          ))
-        )}
-      </ScrollView>
-
-      {/* Add Button */}
-      <TouchableOpacity style={styles.addButton} onPress={handleAddTransaction}>
-        <Ionicons name="add" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-
-      {/* Pagination Controls */}
-      {totalCount > limit && (
-        <View style={styles.paginationContainer}>
-          <TouchableOpacity 
-            style={[styles.paginationButton, currentPage === 1 && styles.paginationButtonDisabled]}
-            onPress={() => setCurrentPage(1)}
-            disabled={currentPage === 1}
-          >
-            <Ionicons name="chevron-back" size={16} color={currentPage === 1 ? '#D1D5DB' : '#3B82F6'} />
-          </TouchableOpacity>
-          
-          <View style={styles.paginationInfo}>
-            <Text style={styles.paginationText}>
-              Page {currentPage} of {Math.ceil(totalCount / limit)}
-            </Text>
-            <Text style={styles.paginationCount}>
-              {transactions.length} of {totalCount} items
-            </Text>
-          </View>
-          
-          <TouchableOpacity 
-            style={[styles.paginationButton, currentPage >= Math.ceil(totalCount / limit) && styles.paginationButtonDisabled]}
-            onPress={() => setCurrentPage(currentPage + 1)}
-            disabled={currentPage >= Math.ceil(totalCount / limit)}
-          >
-            <Ionicons name="chevron-forward" size={16} color={currentPage >= Math.ceil(totalCount / limit) ? '#D1D5DB' : '#3B82F6'} />
-          </TouchableOpacity>
+          ))}
         </View>
       )}
+    </View>
+  );
+
+  const renderFooter = () => {
+    if (totalPages <= 1) return <View style={{ height: 80 }} />;
+    return (
+      <View style={styles.pagination}>
+        <TouchableOpacity 
+          style={[styles.pageBtn, page === 1 && styles.pageBtnDisabled]}
+          onPress={() => setPage(p => Math.max(1, p - 1))}
+          disabled={page === 1}
+        >
+          <Ionicons name="chevron-back" size={20} color={page === 1 ? "#CBD5E1" : "#3B82F6"} />
+        </TouchableOpacity>
+        <Text style={styles.pageInfo}>Page {page} of {totalPages}</Text>
+        <TouchableOpacity 
+          style={[styles.pageBtn, page === totalPages && styles.pageBtnDisabled]}
+          onPress={() => setPage(p => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+        >
+          <Ionicons name="chevron-forward" size={20} color={page === totalPages ? "#CBD5E1" : "#3B82F6"} />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      {renderHeader()}
+
+      {loading && !refreshing && transactions.length === 0 ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#3B82F6" />
+        </View>
+      ) : (
+        <FlatList
+          data={transactions}
+          renderItem={renderTransactionItem}
+          keyExtractor={(item) => item._id}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3B82F6']} />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="receipt-outline" size={60} color="#DBEAFE" />
+              <Text style={styles.emptyTitle}>No Transactions</Text>
+              <Text style={styles.emptySubtitle}>Try adjusting your search or filters.</Text>
+            </View>
+          }
+          ListFooterComponent={renderFooter}
+        />
+      )}
+
+      <TouchableOpacity style={styles.fab} onPress={() => handleOpenModal()}>
+        <Ionicons name="add" size={30} color="#FFFFFF" />
+      </TouchableOpacity>
+
+      {/* Add/Edit Modal */}
+      <Modal visible={isModalVisible} transparent animationType="slide" onRequestClose={() => setIsModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{editingTransaction ? 'Edit Transaction' : 'Add Transaction'}</Text>
+              <TouchableOpacity onPress={() => setIsModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {showCategoryList ? (
+              <View style={styles.categoryListContainer}>
+                <View style={styles.modalSearchBox}>
+                  <Ionicons name="search-outline" size={18} color="#94A3B8" />
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search category..."
+                    value={categorySearchQuery}
+                    onChangeText={setCategorySearchQuery}
+                    autoFocus={true}
+                  />
+                  <TouchableOpacity onPress={() => setShowCategoryList(false)}>
+                    <Text style={styles.closePickerText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <FlatList
+                  data={categories.filter(c => c.name.toLowerCase().includes(categorySearchQuery.toLowerCase()))}
+                  keyExtractor={(item) => item._id}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity 
+                      style={[styles.categoryItem, form.category === item._id && styles.categoryItemActive]}
+                      onPress={() => {
+                        setForm({ ...form, category: item._id });
+                        setShowCategoryList(false);
+                      }}
+                    >
+                      <Text style={[styles.categoryItemText, form.category === item._id && styles.categoryItemTextActive]}>
+                        {item.name}
+                      </Text>
+                      {form.category === item._id && <Ionicons name="checkmark-circle" size={20} color="#3B82F6" />}
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={<Text style={styles.emptySearchText}>No categories found</Text>}
+                />
+              </View>
+            ) : (
+              <FlatList
+                data={[1]}
+                keyExtractor={(item) => item.toString()}
+                renderItem={() => (
+                  <View style={styles.modalBody}>
+                  {/* Type Selector */}
+                  <Text style={styles.label}>Type *</Text>
+                  <View style={styles.typeSelector}>
+                    {['Income', 'Expense', 'Saving'].map((type) => (
+                      <TouchableOpacity 
+                        key={type}
+                        style={[styles.typeOption, form.type === type && styles.typeOptionActive]}
+                        onPress={() => setForm({ ...form, type })}
+                      >
+                        <Text style={[styles.typeOptionText, form.type === type && styles.typeOptionTextActive]}>{type}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.label}>Amount *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g. 1000"
+                    keyboardType="numeric"
+                    value={form.amount}
+                    onChangeText={(text) => setForm({ ...form, amount: text })}
+                  />
+
+                  <Text style={styles.label}>Main Category *</Text>
+                  <TouchableOpacity 
+                    style={styles.dropdownTrigger} 
+                    onPress={() => {
+                      setCategorySearchQuery('');
+                      setShowCategoryList(true);
+                    }}
+                  >
+                    <Text style={[styles.dropdownText, !form.category && { color: '#94A3B8' }]}>
+                      {categories.find(c => c._id === form.category)?.name || 'Select Category'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={20} color="#64748B" />
+                  </TouchableOpacity>
+
+                  <View style={styles.row}>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={styles.label}>Payment Mode *</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modeScroll}>
+                        {['Cash', 'Card', 'UPI', 'Wallet', 'Bank Transfer', 'Other'].map((mode) => (
+                          <TouchableOpacity 
+                            key={mode}
+                            style={[styles.modePill, form.paymentMode === mode && styles.modePillActive]}
+                            onPress={() => setForm({ ...form, paymentMode: mode })}
+                          >
+                            <Text style={[styles.modePillText, form.paymentMode === mode && styles.modePillTextActive]}>{mode}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={styles.label}>Date *</Text>
+                      <TouchableOpacity style={styles.input} onPress={() => setShowDatePicker(true)}>
+                        <Text style={{ color: '#1E293B' }}>{formatDate(form.date)}</Text>
+                        <Ionicons name="calendar-outline" size={18} color="#64748B" style={styles.inputIcon} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {showDatePicker && (
+                    <DateTimePicker
+                      value={form.date}
+                      mode="date"
+                      display="default"
+                      onChange={(event, selectedDate) => {
+                        setShowDatePicker(Platform.OS === 'ios');
+                        if (selectedDate) setForm({ ...form, date: selectedDate });
+                      }}
+                    />
+                  )}
+
+                  <Text style={styles.label}>Tags</Text>
+                  <View style={styles.tagInputContainer}>
+                    <TextInput
+                      style={[styles.input, { flex: 1 }]}
+                      placeholder="Press Enter to add"
+                      value={tagInput}
+                      onChangeText={setTagInput}
+                      onSubmitEditing={addTag}
+                    />
+                    <TouchableOpacity style={styles.addTagBtn} onPress={addTag}>
+                      <Ionicons name="add" size={24} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.tagsList}>
+                    {form.tags.map((tag) => (
+                      <View key={tag} style={styles.tagPill}>
+                        <Text style={styles.tagText}>{tag}</Text>
+                        <TouchableOpacity onPress={() => removeTag(tag)}>
+                          <Ionicons name="close-circle" size={16} color="#64748B" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Text style={styles.label}>Note</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Add a note..."
+                    multiline
+                    numberOfLines={3}
+                    value={form.note}
+                    onChangeText={(text) => setForm({ ...form, note: text })}
+                  />
+                </View>
+              )}
+              showsVerticalScrollIndicator={false}
+            />
+            )}
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setIsModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSaveTransaction} disabled={isSubmitting}>
+                {isSubmitting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.saveBtnText}>Save</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Filter Modal */}
-      <Modal
-        visible={showFilterModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowFilterModal(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Filter Transactions</Text>
-            <TouchableOpacity onPress={() => setShowFilterModal(false)}>
-              <Ionicons name="close" size={24} color="#6B7280" />
-            </TouchableOpacity>
-          </View>
+      <Modal visible={isFilterModalVisible} transparent animationType="slide" onRequestClose={() => setIsFilterModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Filter Transactions</Text>
+              <TouchableOpacity onPress={() => setIsFilterModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#64748B" />
+              </TouchableOpacity>
+            </View>
 
-          <View style={styles.filterContent}>
-            <View style={styles.filterField}>
-              <Text style={styles.filterLabel}>Category</Text>
-              <View style={styles.categorySelect}>
-                <Text style={styles.selectText}>
-                  {filters.category ? categories.find(c => c._id === filters.category)?.name : 'All Categories'}
-                </Text>
-                <Ionicons name="chevron-down" size={16} color="#6B7280" />
+            {isFilterCategoryPickerVisible ? (
+              <View style={styles.categoryListContainer}>
+                <View style={styles.modalSearchBox}>
+                  <Ionicons name="search-outline" size={18} color="#94A3B8" />
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search category..."
+                    value={categorySearchQuery}
+                    onChangeText={setCategorySearchQuery}
+                    autoFocus={true}
+                  />
+                  <TouchableOpacity onPress={() => setIsFilterCategoryPickerVisible(false)}>
+                    <Text style={styles.closePickerText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+                <FlatList
+                  data={categories.filter(c => c.name.toLowerCase().includes(categorySearchQuery.toLowerCase()))}
+                  keyExtractor={(item) => item._id}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity 
+                      style={[styles.categoryItem, filters.category === item._id && styles.categoryItemActive]}
+                      onPress={() => {
+                        setFilters({ ...filters, category: item._id });
+                        setIsFilterCategoryPickerVisible(false);
+                      }}
+                    >
+                      <Text style={[styles.categoryItemText, filters.category === item._id && styles.categoryItemTextActive]}>
+                        {item.name}
+                      </Text>
+                      {filters.category === item._id && <Ionicons name="checkmark-circle" size={20} color="#3B82F6" />}
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={<Text style={styles.emptySearchText}>No categories found</Text>}
+                />
               </View>
-            </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+                <Text style={styles.label}>Transaction Type</Text>
+                <View style={styles.typeSelector}>
+                  {['Income', 'Expense', 'Saving', ''].map((t) => (
+                    <TouchableOpacity 
+                      key={t}
+                      style={[styles.typeOption, filters.type === t && styles.typeOptionActive]}
+                      onPress={() => setFilters({ ...filters, type: t })}
+                    >
+                      <Text style={[styles.typeOptionText, filters.type === t && styles.typeOptionTextActive]}>{t || 'All'}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
-            <View style={styles.filterField}>
-              <Text style={styles.filterLabel}>Start Date</Text>
-              <TextInput
-                style={styles.dateInput}
-                placeholder="YYYY-MM-DD"
-                value={filters.startDate}
-                onChangeText={(text) => setFilters({...filters, startDate: text})}
-              />
-            </View>
+                <Text style={styles.label}>Category</Text>
+                <TouchableOpacity 
+                  style={styles.dropdownTrigger} 
+                  onPress={() => {
+                    setCategorySearchQuery('');
+                    setIsFilterCategoryPickerVisible(true);
+                  }}
+                >
+                  <Text style={[styles.dropdownText, !filters.category && { color: '#94A3B8' }]}>
+                    {categories.find(c => c._id === filters.category)?.name || 'Select Category'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={20} color="#64748B" />
+                </TouchableOpacity>
 
-            <View style={styles.filterField}>
-              <Text style={styles.filterLabel}>End Date</Text>
-              <TextInput
-                style={styles.dateInput}
-                placeholder="YYYY-MM-DD"
-                value={filters.endDate}
-                onChangeText={(text) => setFilters({...filters, endDate: text})}
-              />
-            </View>
+                <Text style={styles.label}>Tag</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modeScroll}>
+                  <TouchableOpacity 
+                    style={[styles.modePill, !filters.tags && styles.modePillActive]}
+                    onPress={() => setFilters({ ...filters, tags: '' })}
+                  >
+                    <Text style={[styles.modePillText, !filters.tags && styles.modePillTextActive]}>All</Text>
+                  </TouchableOpacity>
+                  {tags.map((tag) => (
+                    <TouchableOpacity 
+                      key={tag}
+                      style={[styles.modePill, filters.tags === tag && styles.modePillActive]}
+                      onPress={() => setFilters({ ...filters, tags: tag })}
+                    >
+                      <Text style={[styles.modePillText, filters.tags === tag && styles.modePillTextActive]}>{tag}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
 
-            <View style={styles.filterField}>
-              <Text style={styles.filterLabel}>Tags</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Enter tags..."
-                value={filters.tags}
-                onChangeText={(text) => setFilters({...filters, tags: text})}
-              />
-            </View>
-          </View>
+                <View style={styles.row}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={styles.label}>Start Date</Text>
+                    <TouchableOpacity style={styles.input} onPress={() => setShowFilterStartDatePicker(true)}>
+                      <Text style={{ color: filters.startDate ? '#1E293B' : '#94A3B8' }}>
+                        {filters.startDate ? formatDate(filters.startDate) : 'dd-mm-yyyy'}
+                      </Text>
+                      <Ionicons name="calendar-outline" size={18} color="#64748B" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={styles.label}>End Date</Text>
+                    <TouchableOpacity style={styles.input} onPress={() => setShowFilterEndDatePicker(true)}>
+                      <Text style={{ color: filters.endDate ? '#1E293B' : '#94A3B8' }}>
+                        {filters.endDate ? formatDate(filters.endDate) : 'dd-mm-yyyy'}
+                      </Text>
+                      <Ionicons name="calendar-outline" size={18} color="#64748B" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
 
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.clearButton} onPress={handleClearFilters}>
-              <Text style={styles.clearButtonText}>Clear</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.applyButton} onPress={handleApplyFilters}>
-              <Text style={styles.applyButtonText}>Apply</Text>
-            </TouchableOpacity>
+                {showFilterStartDatePicker && (
+                  <DateTimePicker
+                    value={filters.startDate || new Date()}
+                    mode="date"
+                    display="default"
+                    onChange={(event, date) => {
+                      setShowFilterStartDatePicker(Platform.OS === 'ios');
+                      if (date) setFilters({ ...filters, startDate: date });
+                    }}
+                  />
+                )}
+
+                {showFilterEndDatePicker && (
+                  <DateTimePicker
+                    value={filters.endDate || new Date()}
+                    mode="date"
+                    display="default"
+                    onChange={(event, date) => {
+                      setShowFilterEndDatePicker(Platform.OS === 'ios');
+                      if (date) setFilters({ ...filters, endDate: date });
+                    }}
+                  />
+                )}
+
+                <View style={[styles.modalFooter, { marginTop: 40 }]}>
+                  <TouchableOpacity 
+                    style={styles.cancelBtn} 
+                    onPress={() => {
+                      setFilters({ category: '', tags: '', startDate: null, endDate: null, type: '' });
+                      setIsFilterModalVisible(false);
+                    }}
+                  >
+                    <Text style={styles.cancelBtnText}>Reset</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.saveBtn} onPress={() => setIsFilterModalVisible(false)}>
+                    <Text style={styles.saveBtnText}>Apply Filters</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
@@ -421,400 +747,131 @@ const TransactionsScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F9FAFB',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: { backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  searchSection: { flexDirection: 'row', padding: 16, alignItems: 'center', gap: 8 },
+  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1F5F9', borderRadius: 12, paddingHorizontal: 12, height: 48 },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 16, color: '#1E293B' },
+  limitSelector: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1F5F9', paddingHorizontal: 12, height: 48, borderRadius: 12, gap: 4 },
+  limitText: { fontSize: 14, fontWeight: '600', color: '#64748B' },
+  filterBtn: { width: 48, height: 48, borderRadius: 12, backgroundColor: '#F1F5F9', justifyContent: 'center', alignItems: 'center' },
+  filterBtnActive: { backgroundColor: '#3B82F6' },
+  limitDropdown: { position: 'absolute', top: 110, right: 70, width: 100, backgroundColor: '#FFFFFF', borderRadius: 12, padding: 8, elevation: 10, zIndex: 1000, borderWidth: 1, borderColor: '#F1F5F9' },
+  limitOption: { padding: 12, borderRadius: 8 },
+  limitOptionText: { fontSize: 14, color: '#64748B' },
+  limitOptionTextActive: { color: '#3B82F6', fontWeight: '600' },
+  listContent: { padding: 16 },
+  transactionCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, marginBottom: 16, elevation: 2, borderWidth: 1, borderColor: '#F1F5F9' },
+  cardHeader: { flexDirection: 'row', alignItems: 'center' },
+  typeIconContainer: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  cardTitleSection: { flex: 1 },
+  transactionTitle: { fontSize: 16, fontWeight: '700', color: '#1E293B' },
+  transactionDate: { fontSize: 12, color: '#64748B', marginTop: 2 },
+  amountSection: { alignItems: 'flex-end' },
+  amountText: { fontSize: 18, fontWeight: '800' },
+  paymentModeText: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
+  noteSection: { marginTop: 12, padding: 8, backgroundColor: '#F8FAFC', borderRadius: 8 },
+  noteText: { fontSize: 13, color: '#64748B', fontStyle: 'italic' },
+  tagsDisplay: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 12 },
+  displayTag: { backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  displayTagText: { fontSize: 11, color: '#3B82F6', fontWeight: '600' },
+  cardActions: { flexDirection: 'row', marginTop: 16, borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12, gap: 16 },
+  cardActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  cardActionText: { fontSize: 14, fontWeight: '600', color: '#3B82F6' },
+  pagination: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 20, gap: 20 },
+  pageBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center' },
+  pageBtnDisabled: { backgroundColor: '#F1F5F9' },
+  pageInfo: { fontSize: 14, fontWeight: '600', color: '#64748B' },
+  fab: { position: 'absolute', bottom: 30, right: 20, width: 60, height: 60, borderRadius: 30, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center', elevation: 8 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.5)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 32, borderTopRightRadius: 32, height: '90%', padding: 24 },
+  filterModalContent: { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 24, margin: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  modalTitle: { fontSize: 22, fontWeight: '800', color: '#1E293B' },
+  modalBody: { paddingBottom: 100 },
+  label: { fontSize: 14, fontWeight: '600', color: '#64748B', marginBottom: 8, marginTop: 16 },
+  input: { backgroundColor: '#F1F5F9', borderRadius: 12, paddingHorizontal: 16, height: 54, fontSize: 16, color: '#1E293B', borderWidth: 1, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  textArea: { height: 80, textAlignVertical: 'top', paddingTop: 16 },
+  inputIcon: { position: 'absolute', right: 16 },
+  typeSelector: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  typeOption: { flex: 1, height: 44, borderRadius: 10, backgroundColor: '#F1F5F9', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  typeOptionActive: { backgroundColor: '#3B82F6', borderColor: '#3B82F6' },
+  typeOptionText: { fontSize: 14, fontWeight: '600', color: '#64748B' },
+  typeOptionTextActive: { color: '#FFFFFF' },
+  modeScroll: { flexDirection: 'row', marginTop: 4 },
+  modePill: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#F1F5F9', marginRight: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  modePillActive: { backgroundColor: '#EFF6FF', borderColor: '#3B82F6' },
+  modePillText: { fontSize: 12, color: '#64748B', fontWeight: '500' },
+  modePillTextActive: { color: '#3B82F6', fontWeight: '600' },
+  row: { flexDirection: 'row', marginTop: 8 },
+  tagInputContainer: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  addTagBtn: { width: 54, height: 54, borderRadius: 12, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center' },
+  tagsList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  tagPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F1F5F9', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  tagText: { fontSize: 14, color: '#1E293B' },
+  modalFooter: { flexDirection: 'row', gap: 12, paddingVertical: 16, borderTopWidth: 1, borderTopColor: '#F1F5F9', backgroundColor: '#FFFFFF' },
+  cancelBtn: { flex: 1, height: 54, borderRadius: 12, backgroundColor: '#F1F5F9', justifyContent: 'center', alignItems: 'center' },
+  cancelBtnText: { fontSize: 16, fontWeight: '600', color: '#64748B' },
+  saveBtn: { flex: 1, height: 54, borderRadius: 12, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center' },
+  saveBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 80 },
+  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#1E293B', marginTop: 16 },
+  emptySubtitle: { fontSize: 16, color: '#64748B', textAlign: 'center', marginTop: 8 },
   
-  // Header Styles
-  headerContainer: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 8,
-  },
-  searchBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 14,
-    color: '#1F2937',
-  },
-  filterButton: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-  },
-  totalContainer: {
-    alignItems: 'flex-end',
-  },
-  totalLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  totalAmount: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1F2937',
-  },
-
-  // Quick Filters
-  quickFiltersContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    gap: 8,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  quickFilter: {
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#F3F4F6',
-  },
-  quickFilterActive: {
-    backgroundColor: '#3B82F6',
-  },
-  quickFilterText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  quickFilterTextActive: {
-    color: '#FFFFFF',
-  },
-
-  // Transaction Card Styles
-  scrollView: {
-    flex: 1,
-    backgroundColor: '#F9FAFB',
-    paddingHorizontal: 16,
-  },
-  transactionCard: {
-    backgroundColor: '#FFFFFF',
+  // New Styles
+  dropdownTrigger: {
+    backgroundColor: '#F1F5F9',
     borderRadius: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  cardLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  typeIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-    transactionInfo: {
-    flex: 1,
-  },
-  transactionDescription: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 2,
-  },
-  transactionMeta: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-  cardRight: {
-    alignItems: 'flex-end',
-  },
-  transactionAmount: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  incomeAmount: {
-    color: '#10B981',
-  },
-  expenseAmount: {
-    color: '#EF4444',
-  },
-
-  // Card Details
-  cardDetails: {
-    padding: 16,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  detailIcon: {
-    width: 20,
-    height: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  detailContent: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  detailLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-    minWidth: 60,
-  },
-  detailValue: {
-    fontSize: 12,
-    color: '#1F2937',
-    fontWeight: '600',
-    flex: 1,
-    textAlign: 'right',
-  },
-
-  // Tags Styles
-  tagsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-  },
-  tag: {
-    backgroundColor: '#E5E7EB',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  tagText: {
-    fontSize: 10,
-    color: '#6B7280',
-  },
-  moreTagsText: {
-    fontSize: 10,
-    color: '#6B7280',
-  },
-
-  // Edit Card Button
-  editCardButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // Floating Add Button
-  addButton: {
-    position: 'absolute',
-    bottom: 20,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#3B82F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-
-  // Modal Styles
-  modalContainer: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 20,
     paddingHorizontal: 16,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1F2937',
-  },
-  filterContent: {
-    gap: 16,
-  },
-  filterField: {
-    gap: 8,
-  },
-  filterLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  categorySelect: {
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
     borderWidth: 1,
-    borderColor: '#D1D5DB',
+    borderColor: '#E2E8F0',
+    marginTop: 8,
   },
-  selectText: {
-    fontSize: 14,
-    color: '#1F2937',
-  },
-  dateInput: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    fontSize: 14,
-  },
-  textInput: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    fontSize: 14,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 20,
-  },
-  clearButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-  },
-  clearButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6B7280',
-  },
-  applyButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#3B82F6',
-    alignItems: 'center',
-  },
-  applyButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-
-  // Pagination Styles
-  paginationContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+  dropdownText: { fontSize: 16, color: '#1E293B' },
+  categoryPickerContent: {
     backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    margin: 20,
+    width: width - 40,
+    maxHeight: '80%',
   },
-  paginationButton: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-  },
-  paginationButtonDisabled: {
-    backgroundColor: '#F9FAFB',
-  },
-  paginationInfo: {
-    flex: 1,
+  modalSearchBox: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 44,
+    marginBottom: 16,
   },
-  paginationText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
+  modalSearchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: '#1E293B' },
+  categoryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
-  paginationCount: {
-    fontSize: 11,
-    color: '#9CA3AF',
+  categoryItemActive: { backgroundColor: '#EFF6FF', borderRadius: 8, paddingHorizontal: 12 },
+  categoryItemText: { fontSize: 15, color: '#475569' },
+  categoryItemTextActive: { color: '#3B82F6', fontWeight: '600' },
+  emptySearchText: { textAlign: 'center', color: '#94A3B8', marginTop: 20, fontSize: 14 },
+  categoryListContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    marginTop: 10,
+  },
+  closePickerText: {
+    color: '#3B82F6',
+    fontWeight: '700',
     marginLeft: 8,
-  },
-
-  // Empty State
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 20,
-  },
-  emptyStateTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginTop: 16,
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  emptyStateDescription: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 20,
   },
 });
 
