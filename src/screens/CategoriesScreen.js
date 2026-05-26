@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { categoryApi } from '../api';
+import { categoryApi, transactionApi } from '../api';
 import Header from '../components/Header';
 import { showToast } from '../utils/toast';
 
@@ -39,6 +39,12 @@ const CategoriesScreen = () => {
   const [editingCategory, setEditingCategory] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showLimitDropdown, setShowLimitDropdown] = useState(false);
+
+  // Transaction modal states
+  const [isTransactionModalVisible, setIsTransactionModalVisible] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [modalTransactions, setModalTransactions] = useState([]);
+  const [modalLoading, setModalLoading] = useState(false);
 
   const fetchCategories = useCallback(async (isInitial = false) => {
     // Prevent multiple simultaneous fetches for the same data, but allow initial load
@@ -202,6 +208,38 @@ const CategoriesScreen = () => {
     setIsEditModalVisible(true);
   };
 
+  const formatCurrency = (amount = 0) => `₹${Number(amount || 0).toLocaleString()}`;
+
+  const fetchCategoryTransactions = async (category) => {
+    setModalLoading(true);
+    try {
+      const response = await transactionApi.getTransactions({
+        limit: 100,
+        category: category._id,
+        type: 'Expense',
+      });
+      setModalTransactions(response?.data?.transactions || []);
+    } catch (error) {
+      console.error('Error fetching category transactions:', error);
+      showToast.error('Error', 'Failed to fetch transactions');
+      setModalTransactions([]);
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  const openTransactionModal = (category) => {
+    setSelectedCategory(category);
+    setIsTransactionModalVisible(true);
+    fetchCategoryTransactions(category);
+  };
+
+  const closeTransactionModal = () => {
+    setIsTransactionModalVisible(false);
+    setSelectedCategory(null);
+    setModalTransactions([]);
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
@@ -246,6 +284,29 @@ const CategoriesScreen = () => {
           </TouchableOpacity>
         </View>
       </View>
+
+      <View style={styles.totalsRow}>
+        <View style={styles.totalCard}>
+          <Text style={styles.totalLabel}>Invested</Text>
+          <Text style={[styles.totalValue, styles.investedValue]}>
+            {formatCurrency(category.totalInvested)}
+          </Text>
+        </View>
+        <View style={styles.totalCard}>
+          <Text style={styles.totalLabel}>Spent</Text>
+          <Text style={[styles.totalValue, styles.spentValue]}>
+            {formatCurrency(category.totalSpent)}
+          </Text>
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={styles.viewTransactionsButton}
+        onPress={() => openTransactionModal(category)}
+      >
+        <Ionicons name="receipt-outline" size={18} color="#2563EB" />
+        <Text style={styles.viewTransactionsText}>View Transactions</Text>
+      </TouchableOpacity>
     </View>
   );
 
@@ -436,6 +497,66 @@ const CategoriesScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Category Transactions Modal */}
+      <Modal
+        visible={isTransactionModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeTransactionModal}
+      >
+        <TouchableOpacity
+          style={styles.transactionModalOverlay}
+          activeOpacity={1}
+          onPress={closeTransactionModal}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.transactionModalContent}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>{selectedCategory?.name}</Text>
+                <Text style={styles.modalSubtitle}>All expense transactions</Text>
+              </View>
+              <TouchableOpacity onPress={closeTransactionModal}>
+                <Ionicons name="close-circle" size={32} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {modalLoading ? (
+              <ActivityIndicator size="large" color="#3B82F6" style={{ marginTop: 40 }} />
+            ) : (
+              <FlatList
+                data={modalTransactions}
+                keyExtractor={(item, index) => item._id || index.toString()}
+                renderItem={({ item }) => (
+                  <View style={styles.modalTransItem}>
+                    <View style={styles.modalTransInfo}>
+                      <Text style={styles.modalTransDate}>{formatDate(item.date)}</Text>
+                      <Text style={styles.modalTransNote} numberOfLines={1}>
+                        {item.note || 'No note'}
+                      </Text>
+                    </View>
+                    <View style={styles.modalTransAmountSection}>
+                      <Text style={styles.modalTransAmount}>{formatCurrency(item.amount)}</Text>
+                      <Text style={styles.modalTransMode}>{item.paymentMode}</Text>
+                    </View>
+                  </View>
+                )}
+                ListEmptyComponent={
+                  <Text style={styles.emptyModalText}>No expense transactions found for this category</Text>
+                }
+                contentContainerStyle={{ paddingBottom: 40 }}
+              />
+            )}
+
+            <View style={styles.modalTotal}>
+              <Text style={styles.modalTotalLabel}>Total Spent</Text>
+              <Text style={styles.modalTotalValue}>
+                {formatCurrency(modalTransactions.reduce((sum, item) => sum + item.amount, 0))}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -579,6 +700,129 @@ const styles = StyleSheet.create({
   actionButton: {
     padding: 8,
     marginLeft: 4,
+  },
+  totalsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  totalCard: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  totalLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  totalValue: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  investedValue: {
+    color: '#059669',
+  },
+  spentValue: {
+    color: '#DC2626',
+  },
+  viewTransactionsButton: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  viewTransactionsText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  transactionModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'flex-end',
+  },
+  transactionModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    height: '80%',
+    padding: 24,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    marginTop: 4,
+  },
+  modalTransItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  modalTransInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  modalTransDate: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  modalTransNote: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 4,
+  },
+  modalTransAmountSection: {
+    alignItems: 'flex-end',
+  },
+  modalTransAmount: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#DC2626',
+  },
+  modalTransMode: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 4,
+  },
+  emptyModalText: {
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginTop: 40,
+    fontSize: 14,
+  },
+  modalTotal: {
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTotalLabel: {
+    fontSize: 16,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  modalTotalValue: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#EF4444',
   },
   fab: {
     position: 'absolute',
