@@ -545,6 +545,7 @@ const CategoriesScreen = () => {
                   <Text style={styles.emptyModalText}>No expense transactions found for this category</Text>
                 }
                 contentContainerStyle={{ paddingBottom: 40 }}
+                style={{ flex: 1 }}
               />
             )}
 
