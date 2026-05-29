@@ -505,12 +505,14 @@ const CategoriesScreen = () => {
         animationType="slide"
         onRequestClose={closeTransactionModal}
       >
-        <TouchableOpacity
-          style={styles.transactionModalOverlay}
-          activeOpacity={1}
-          onPress={closeTransactionModal}
-        >
-          <TouchableOpacity activeOpacity={1} style={styles.transactionModalContent}>
+        <View style={styles.transactionModalOverlay}>
+          {/* Backdrop button to close modal */}
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={closeTransactionModal}
+          />
+          <View style={styles.transactionModalContent}>
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalTitle}>{selectedCategory?.name}</Text>
@@ -544,8 +546,9 @@ const CategoriesScreen = () => {
                 ListEmptyComponent={
                   <Text style={styles.emptyModalText}>No expense transactions found for this category</Text>
                 }
-                contentContainerStyle={{ paddingBottom: 40 }}
+                contentContainerStyle={{ paddingBottom: 10 }}
                 style={{ flex: 1 }}
+                showsVerticalScrollIndicator={false}
               />
             )}
 
@@ -555,8 +558,8 @@ const CategoriesScreen = () => {
                 {formatCurrency(modalTransactions.reduce((sum, item) => sum + item.amount, 0))}
               </Text>
             </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -924,7 +927,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 16,
   },
   modalTitle: {
     fontSize: 22,
