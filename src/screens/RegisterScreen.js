@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
 import { showToast } from '../utils/toast';
 import { authApi } from '../api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const RegisterScreen = ({ navigation }) => {
   const [name, setName] = useState('');
@@ -28,15 +29,21 @@ const RegisterScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      // Don't send roles - backend will assign "Public User" role by default
       const response = await authApi.register({ name, email, password });
-      if (response.data.success) {
+      
+      if (response.accessToken && response.user) {
+        // Store token and user data
+        await AsyncStorage.setItem('token', response.accessToken);
+        await AsyncStorage.setItem('user', JSON.stringify(response.user));
+        
         showToast.success('Welcome! 🎉', 'Account created successfully');
-        navigation.replace('Login');
+        navigation.replace('Main');
       } else {
-        showToast.error('Failed', response.data.message || 'Registration failed');
+        showToast.error('Failed', response.message || 'Registration failed');
       }
     } catch (error) {
-      showToast.error('Error', 'Registration failed. Please try again.');
+      showToast.error('Error', error.response?.data?.message || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }

@@ -42,6 +42,10 @@ const DashboardScreen = ({ navigation }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalTransactions, setModalTransactions] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
+  
+  // Income Visibility States - separate for overall and monthly
+  const [isOverallIncomeVisible, setIsOverallIncomeVisible] = useState(false);
+  const [isMonthlyIncomeVisible, setIsMonthlyIncomeVisible] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -121,8 +125,15 @@ const DashboardScreen = ({ navigation }) => {
       <Text style={styles.sectionHeaderTitle}>Overall Overview</Text>
       <View style={styles.overallGrid}>
         <View style={[styles.overallCard, { borderTopColor: '#3B82F6' }]}>
-          <Text style={styles.overallLabel}>Total Income</Text>
-          <Text style={[styles.overallValue, { color: '#3B82F6' }]}>₹{overallStats.totalIncome.toLocaleString()}</Text>
+          <View style={styles.cardHeader}>
+            <Text style={styles.overallLabel}>Total Income</Text>
+            <TouchableOpacity onPress={() => setIsOverallIncomeVisible(!isOverallIncomeVisible)}>
+              <Ionicons name={isOverallIncomeVisible ? 'eye-off' : 'eye'} size={20} color="#3B82F6" />
+            </TouchableOpacity>
+          </View>
+          <Text style={[styles.overallValue, { color: '#3B82F6' }]}>
+            {isOverallIncomeVisible ? `₹${overallStats.totalIncome.toLocaleString()}` : 'xxxx'}
+          </Text>
         </View>
         <View style={[styles.overallCard, { borderTopColor: '#EF4444' }]}>
           <Text style={styles.overallLabel}>Total Expense</Text>
@@ -157,9 +168,16 @@ const DashboardScreen = ({ navigation }) => {
           <View style={[styles.iconCircle, { backgroundColor: '#DCFCE7' }]}>
             <Ionicons name="arrow-down" size={20} color="#10B981" />
           </View>
-          <View>
-            <Text style={styles.miniLabel}>Income</Text>
-            <Text style={[styles.miniValue, { color: '#059669' }]}>₹{summary.totalIncome.toLocaleString()}</Text>
+          <View style={styles.miniCardContent}>
+            <View style={styles.miniCardHeader}>
+              <Text style={styles.miniLabel}>Income</Text>
+              <TouchableOpacity onPress={() => setIsMonthlyIncomeVisible(!isMonthlyIncomeVisible)}>
+                <Ionicons name={isMonthlyIncomeVisible ? 'eye-off' : 'eye'} size={16} color="#10B981" />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.miniValue, { color: '#059669' }]}>
+              {isMonthlyIncomeVisible ? `₹${summary.totalIncome.toLocaleString()}` : 'xxxx'}
+            </Text>
           </View>
         </View>
         <View style={[styles.miniCard, { borderLeftColor: '#EF4444' }]}>
@@ -470,6 +488,9 @@ const styles = StyleSheet.create({
   },
   overallLabel: { fontSize: 10, color: '#64748B', fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
   overallValue: { fontSize: 14, fontWeight: '800' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  miniCardContent: { flex: 1 },
+  miniCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
 
   // Date Picker Modal Styles
   datePickerOverlay: {

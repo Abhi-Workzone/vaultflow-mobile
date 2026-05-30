@@ -209,7 +209,7 @@ api.interceptors.response.use(
 
 export const authApi = {
   login: (requestJson = {}) => api.post('/v1/auth/login', requestJson),
-  register: (requestJson = {}) => api.post('/v1/auth/register', requestJson),
+  register: (requestJson = {}) => api.post('/v1/auth/signup', requestJson),
   refreshAccessToken: () => api.get('/v1/auth/refresh-access-token'),
 };
 
